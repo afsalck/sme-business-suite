@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+**/node_modules/
+
+# Build outputs
+client/build/
+client/dist/
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+**/.cache/
+client/node_modules/.cache/
+*.cache
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database
+*.db
+*.sqlite
+
+# Uploads (if sensitive)
+uploads/*.pdf
+uploads/*.jpg
+uploads/*.png
+

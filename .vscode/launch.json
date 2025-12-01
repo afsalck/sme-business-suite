@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Start Backend Server",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "cwd": "${workspaceFolder}/server",
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen"
+        },
+        {
+            "type": "chrome",
+            "request": "launch",
+            "name": "Launch Client in Chrome",
+            "url": "http://localhost:3000",
+            "webRoot": "${workspaceFolder}/client",
+            "preLaunchTask": "start-client"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Start Full Application",
+            "configurations": ["Start Backend Server", "Launch Client in Chrome"],
+            "stopAll": true
+        }
+    ]
+}

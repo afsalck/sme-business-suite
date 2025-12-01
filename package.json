@@ -1,0 +1,31 @@
+{
+  "name": "bizease-uae",
+  "version": "1.0.0",
+  "description": "BizEase UAE - Business Automation Platform",
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node start.js",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm start",
+    "install-all": "npm install && cd server && npm install && cd ../client && npm install",
+    "verify": "node verify-setup.js"
+  },
+  "keywords": [
+    "business",
+    "automation",
+    "uae",
+    "invoicing"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dayjs": "^1.11.19",
+    "express": "^4.21.2",
+    "mongoose": "^6.13.8",
+    "mssql": "^12.1.0",
+    "multer": "^2.0.2",
+    "sequelize": "^6.37.7",
+    "tedious": "^19.1.2",
+    "xlsx": "^0.18.5"
+  }
+}

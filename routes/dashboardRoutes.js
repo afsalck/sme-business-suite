@@ -7,6 +7,7 @@ const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 const Employee = require("../models/Employee");
 const { getVatSummary } = require("../server/services/vatService");
+const { setTenantContext } = require("../server/middleware/tenantMiddleware");
 
 const router = express.Router();
 
@@ -17,7 +18,7 @@ router.get("/test", (req, res) => {
   res.json({ message: "Dashboard route is working", user: req.user });
 });
 
-router.get("/metrics", async (req, res) => {
+router.get("/metrics", setTenantContext, async (req, res) => {
   console.log("=".repeat(60));
   console.log("🔵 [DASHBOARD] GET /metrics endpoint called");
   console.log("   Request URL:", req.originalUrl);
@@ -58,15 +59,27 @@ router.get("/metrics", async (req, res) => {
       return filter;
     };
 
-    const saleWhere = buildDateFilter('date');
-    const invoiceWhere = buildDateFilter('issueDate');
-    const expenseWhere = buildDateFilter('date');
+    const { buildWhereClause } = require('../server/utils/queryHelpers');
+    
+    const saleWhere = buildWhereClause(req, {
+      ...buildDateFilter('date')
+    });
+    const invoiceWhere = buildWhereClause(req, {
+      ...buildDateFilter('issueDate')
+    });
+    const expenseWhere = buildWhereClause(req, {
+      ...buildDateFilter('date')
+    });
 
     // Build today's date filter
     const todayStart = dayjs().startOf("day").toDate();
     const todayEnd = dayjs().endOf("day").toDate();
-    const todaySaleWhere = { date: { [Op.between]: [todayStart, todayEnd] } };
-    const todayExpenseWhere = { date: { [Op.between]: [todayStart, todayEnd] } };
+    const todaySaleWhere = buildWhereClause(req, {
+      date: { [Op.between]: [todayStart, todayEnd] } 
+    });
+    const todayExpenseWhere = buildWhereClause(req, {
+      date: { [Op.between]: [todayStart, todayEnd] } 
+    });
 
     // Use Promise.allSettled so one failure doesn't break everything
     const [salesResult, expenseResult, invoiceResult, expiringResult, todaySalesResult, todayExpenseResult, invoiceStatsResult, vatSummaryResult] = await Promise.allSettled([
@@ -102,6 +115,7 @@ router.get("/metrics", async (req, res) => {
       // Expiring employees (visa or passport expiring in 30 days)
       Employee.count({
         where: {
+          companyId: req.companyId, // ✅ Filter by companyId
           [Op.or]: [
             {
               visaExpiry: {
@@ -137,16 +151,16 @@ router.get("/metrics", async (req, res) => {
       
       // Invoice statistics - use separate counts for better SQL Server compatibility
       Promise.all([
-        Invoice.count().catch(() => 0),
-        Invoice.count({ where: { status: 'paid' } }).catch(() => 0),
-        Invoice.count({ where: { status: 'overdue' } }).catch(() => 0)
+        Invoice.count({ where: { companyId: req.companyId } }).catch(() => 0),
+        Invoice.count({ where: { companyId: req.companyId, status: 'paid' } }).catch(() => 0),
+        Invoice.count({ where: { companyId: req.companyId, status: 'overdue' } }).catch(() => 0)
       ]).then(([total, paid, overdue]) => ({
         totalInvoices: total,
         paidInvoices: paid,
         overdueInvoices: overdue
       })).catch(() => ({ totalInvoices: 0, paidInvoices: 0, overdueInvoices: 0 })),
       
-      getVatSummary({ from, to }).catch(() => null)
+      getVatSummary({ from, to, companyId: req.companyId }).catch(() => null)
     ]);
 
     // Extract values from Promise.allSettled results

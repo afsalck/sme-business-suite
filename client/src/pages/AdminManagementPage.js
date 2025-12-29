@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import useAuth from "../hooks/useAuth";
 import apiClient from "../services/apiClient";
@@ -26,23 +26,7 @@ export default function AdminManagementPage({ language }) {
   const [editing, setEditing] = useState(null);
   const [formData, setFormData] = useState({});
 
-  // Check if user is admin
-  if (role !== "admin") {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <EmptyState
-          title="Access Denied"
-          description="You must be an administrator to access this page."
-        />
-      </div>
-    );
-  }
-
-  useEffect(() => {
-    loadData();
-  }, [activeTab]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -78,10 +62,29 @@ export default function AdminManagementPage({ language }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab]);
+
+  useEffect(() => {
+    // Only load data if user is admin
+    if (role === "admin") {
+      loadData();
+    }
+  }, [activeTab, role, loadData]);
+
+  // Check if user is admin - AFTER all hooks are called
+  if (role !== "admin") {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <EmptyState
+          title={t("admin.accessDenied")}
+          description={t("admin.mustBeAdmin")}
+        />
+      </div>
+    );
+  }
 
   const handleDelete = async (id, uid = null) => {
-    if (!window.confirm("Are you sure you want to delete this item?")) {
+    if (!window.confirm(t("admin.deleteConfirm"))) {
       return;
     }
 
@@ -107,7 +110,7 @@ export default function AdminManagementPage({ language }) {
       await loadData();
     } catch (err) {
       console.error("Error deleting:", err);
-      alert(err?.response?.data?.message || "Failed to delete item");
+      alert(err?.response?.data?.message || t("admin.failedToDelete"));
     }
   };
 
@@ -117,7 +120,7 @@ export default function AdminManagementPage({ language }) {
       await loadData();
     } catch (err) {
       console.error("Error updating role:", err);
-      alert(err?.response?.data?.message || "Failed to update role");
+      alert(err?.response?.data?.message || t("admin.failedToUpdateRole"));
     }
   };
 
@@ -147,24 +150,24 @@ export default function AdminManagementPage({ language }) {
       await loadData();
     } catch (err) {
       console.error("Error updating:", err);
-      alert(err?.response?.data?.message || "Failed to update item");
+      alert(err?.response?.data?.message || t("admin.failedToUpdate"));
     }
   };
 
   const renderUsersTable = () => {
     if (loading) return <LoadingState />;
-    if (data.length === 0) return <EmptyState title="No users found" />;
+    if (data.length === 0) return <EmptyState title={t("admin.noUsersFound")} />;
 
     return (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Email</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Name</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Role</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Last Login</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Actions</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.email")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.name")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.role") || "Role"}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.lastLogin")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
@@ -174,16 +177,18 @@ export default function AdminManagementPage({ language }) {
                 <td className="whitespace-nowrap px-6 py-4 text-sm text-slate-900">{user.displayName || "-"}</td>
                 <td className="whitespace-nowrap px-6 py-4 text-sm">
                   <select
-                    value={user.role}
+                    value={user.role || "staff"}
                     onChange={(e) => handleUpdateRole(user.uid, e.target.value)}
                     className="rounded border border-slate-300 px-2 py-1 text-sm"
                   >
                     <option value="staff">Staff</option>
+                    <option value="hr">HR</option>
+                    <option value="accountant">Accountant</option>
                     <option value="admin">Admin</option>
                   </select>
                 </td>
                 <td className="whitespace-nowrap px-6 py-4 text-sm text-slate-500">
-                  {user.lastLoginAt ? dayjs(user.lastLoginAt).format("YYYY-MM-DD HH:mm") : "Never"}
+                  {user.lastLoginAt ? dayjs(user.lastLoginAt).format("YYYY-MM-DD HH:mm") : t("admin.never")}
                 </td>
                 <td className="whitespace-nowrap px-6 py-4 text-sm">
                   <button
@@ -203,18 +208,18 @@ export default function AdminManagementPage({ language }) {
 
   const renderEmployeesTable = () => {
     if (loading) return <LoadingState />;
-    if (data.length === 0) return <EmptyState title="No employees found" />;
+    if (data.length === 0) return <EmptyState title={t("admin.noEmployeesFound")} />;
 
     return (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Name</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Position</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Salary</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Visa Expiry</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Actions</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.name")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("employees.position")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("employees.salary")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("employees.visaExpiry")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
@@ -234,13 +239,13 @@ export default function AdminManagementPage({ language }) {
                       onClick={() => handleEdit(employee)}
                       className="rounded bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                     >
-                      Edit
+                      {t("common.edit")}
                     </button>
                     <button
                       onClick={() => handleDelete(employee.id || employee._id)}
                       className="rounded bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                     >
-                      Delete
+                      {t("common.delete")}
                     </button>
                   </div>
                 </td>
@@ -254,18 +259,18 @@ export default function AdminManagementPage({ language }) {
 
   const renderInvoicesTable = () => {
     if (loading) return <LoadingState />;
-    if (data.length === 0) return <EmptyState title="No invoices found" />;
+    if (data.length === 0) return <EmptyState title={t("admin.noInvoicesFound")} />;
 
     return (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Customer</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Date</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Total</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Status</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Actions</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.customer")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.date")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.total")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.status")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
@@ -292,7 +297,7 @@ export default function AdminManagementPage({ language }) {
                     onClick={() => handleDelete(invoice.id || invoice._id)}
                     className="rounded bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                   >
-                    Delete
+                    {t("common.delete")}
                   </button>
                 </td>
               </tr>
@@ -305,18 +310,18 @@ export default function AdminManagementPage({ language }) {
 
   const renderExpensesTable = () => {
     if (loading) return <LoadingState />;
-    if (data.length === 0) return <EmptyState title="No expenses found" />;
+    if (data.length === 0) return <EmptyState title={t("admin.noExpensesFound")} />;
 
     return (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Category</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Date</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Amount</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Description</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Actions</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.category")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.date")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.amount")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.description")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
@@ -336,13 +341,13 @@ export default function AdminManagementPage({ language }) {
                       onClick={() => handleEdit(expense)}
                       className="rounded bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                     >
-                      Edit
+                      {t("common.edit")}
                     </button>
                     <button
                       onClick={() => handleDelete(expense.id || expense._id)}
                       className="rounded bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                     >
-                      Delete
+                      {t("common.delete")}
                     </button>
                   </div>
                 </td>
@@ -356,18 +361,18 @@ export default function AdminManagementPage({ language }) {
 
   const renderInventoryTable = () => {
     if (loading) return <LoadingState />;
-    if (data.length === 0) return <EmptyState title="No inventory items found" />;
+    if (data.length === 0) return <EmptyState title={t("admin.noInventoryFound")} />;
 
     return (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-slate-200">
           <thead className="bg-slate-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Name</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Stock</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Sale Price</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Supplier</th>
-              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">Actions</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.name")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.stock")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.salePrice")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("admin.supplier")}</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase text-slate-500">{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 bg-white">
@@ -387,13 +392,13 @@ export default function AdminManagementPage({ language }) {
                         onClick={() => handleEdit(item)}
                         className="rounded bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                       >
-                        Edit
+                        {t("common.edit")}
                       </button>
                       <button
                         onClick={() => handleDelete(itemId)}
                         className="rounded bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                       >
-                        Delete
+                        {t("common.delete")}
                       </button>
                     </div>
                   </td>

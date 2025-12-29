@@ -2,6 +2,7 @@ const express = require('express');
 const { sequelize } = require('../server/config/database');
 const Notification = require('../models/Notification');
 const { authorizeRole } = require('../server/middleware/authMiddleware');
+const { setTenantContext } = require('../server/middleware/tenantMiddleware');
 const { createNotificationIfNotExists } = require('../server/services/notificationService');
 
 const router = express.Router();
@@ -10,7 +11,7 @@ const router = express.Router();
  * GET /api/notifications
  * Get all notifications for the logged-in user
  */
-router.get('/', async (req, res) => {
+router.get('/', setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -21,7 +22,10 @@ router.get('/', async (req, res) => {
     const { status, type, limit = 50, offset = 0 } = req.query;
     const userId = req.user.uid;
 
-    const where = { userId };
+    const where = { 
+      userId,
+      companyId: req.companyId  // ✅ Filter by companyId for data isolation
+    };
     
     if (status) {
       where.status = status;
@@ -54,7 +58,7 @@ router.get('/', async (req, res) => {
  * GET /api/notifications/unread-count
  * Get count of unread notifications
  */
-router.get('/unread-count', async (req, res) => {
+router.get('/unread-count', setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -66,6 +70,7 @@ router.get('/unread-count', async (req, res) => {
     const count = await Notification.count({
       where: {
         userId,
+        companyId: req.companyId,  // ✅ Filter by companyId for data isolation
         status: 'unread'
       }
     });
@@ -81,7 +86,7 @@ router.get('/unread-count', async (req, res) => {
  * PATCH /api/notifications/:id/read
  * Mark a single notification as read
  */
-router.patch('/:id/read', async (req, res) => {
+router.patch('/:id/read', setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -92,10 +97,12 @@ router.patch('/:id/read', async (req, res) => {
     const userId = req.user.uid;
     const notificationId = req.params.id;
 
+    // First verify the notification exists and belongs to the user and company
     const notification = await Notification.findOne({
       where: {
         id: notificationId,
-        userId // Ensure user can only update their own notifications
+        userId,  // Ensure user can only update their own notifications
+        companyId: req.companyId  // ✅ Filter by companyId for data isolation
       }
     });
 
@@ -103,9 +110,29 @@ router.patch('/:id/read', async (req, res) => {
       return res.status(404).json({ message: 'Notification not found' });
     }
 
-    await notification.update({ status: 'read' });
+    // Use raw SQL to avoid date conversion issues with SQL Server
+    const dayjs = require('dayjs');
+    const updatedAt = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    
+    await sequelize.query(`
+      UPDATE notifications 
+      SET status = 'read', updatedAt = ?
+      WHERE id = ? AND userId = ? AND companyId = ?
+    `, {
+      replacements: [updatedAt, notificationId, userId, req.companyId],
+      type: sequelize.QueryTypes.UPDATE
+    });
 
-    res.json(notification.get({ plain: true }));
+    // Fetch the updated notification
+    const updatedNotification = await Notification.findOne({
+      where: {
+        id: notificationId,
+        userId,
+        companyId: req.companyId  // ✅ Filter by companyId for data isolation
+      }
+    });
+
+    res.json(updatedNotification.get({ plain: true }));
   } catch (error) {
     console.error('[Notification] Mark read error:', error);
     res.status(500).json({ message: 'Failed to mark notification as read', error: error.message });
@@ -116,7 +143,7 @@ router.patch('/:id/read', async (req, res) => {
  * PATCH /api/notifications/read-all
  * Mark all notifications as read for the logged-in user
  */
-router.patch('/read-all', async (req, res) => {
+router.patch('/read-all', setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -126,15 +153,27 @@ router.patch('/read-all', async (req, res) => {
   try {
     const userId = req.user.uid;
 
-    const [updatedCount] = await Notification.update(
-      { status: 'read' },
-      {
-        where: {
-          userId,
-          status: 'unread'
-        }
-      }
-    );
+    // Use raw SQL to avoid date conversion issues with SQL Server
+    const dayjs = require('dayjs');
+    const updatedAt = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    
+    const [result] = await sequelize.query(`
+      UPDATE notifications 
+      SET status = 'read', updatedAt = ?
+      WHERE userId = ? AND companyId = ? AND status = 'unread'
+    `, {
+      replacements: [updatedAt, userId, req.companyId],
+      type: sequelize.QueryTypes.UPDATE
+    });
+
+    // Get the count of updated rows
+    const [countResult] = await sequelize.query(`
+      SELECT @@ROWCOUNT as updatedCount
+    `, {
+      type: sequelize.QueryTypes.SELECT
+    });
+
+    const updatedCount = countResult?.updatedCount || 0;
 
     res.json({ 
       message: 'All notifications marked as read',
@@ -179,6 +218,56 @@ router.post('/test', authorizeRole('admin'), async (req, res) => {
   } catch (error) {
     console.error('[Notification] Test notification error:', error);
     res.status(500).json({ message: 'Failed to create test notification', error: error.message });
+  }
+});
+
+/**
+ * POST /api/notifications/trigger-checks
+ * Manually trigger all expiry checks (admin only)
+ * Useful for testing the notification system
+ */
+router.post('/trigger-checks', authorizeRole('admin'), async (req, res) => {
+  try {
+    await sequelize.authenticate();
+  } catch (dbError) {
+    return res.status(503).json({ message: 'Database connection unavailable' });
+  }
+
+  try {
+    const { runAllExpiryChecks } = require('../server/services/notificationService');
+    
+    console.log('[Notification] Manual trigger: Running all expiry checks...');
+    const results = await runAllExpiryChecks();
+    
+    const summary = {
+      passport: results.passport?.length || 0,
+      visa: results.visa?.length || 0,
+      contract: results.contract?.length || 0,
+      tradeLicense: results.tradeLicense?.length || 0,
+      vatFiling: results.vatFiling?.length || 0,
+      invoiceDue: results.invoiceDue?.length || 0,
+      total: (results.passport?.length || 0) + 
+             (results.visa?.length || 0) + 
+             (results.contract?.length || 0) + 
+             (results.tradeLicense?.length || 0) + 
+             (results.vatFiling?.length || 0) + 
+             (results.invoiceDue?.length || 0)
+    };
+
+    console.log('[Notification] Manual trigger completed:', summary);
+
+    res.json({
+      message: 'Expiry checks completed',
+      summary,
+      details: results
+    });
+  } catch (error) {
+    console.error('[Notification] Trigger checks error:', error);
+    res.status(500).json({ 
+      message: 'Failed to trigger expiry checks', 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 

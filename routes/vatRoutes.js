@@ -1,50 +1,27 @@
 const express = require('express');
 const router = express.Router();
 
-const { authorizeRole } = require('../server/middleware/authMiddleware');
+const { verifyFirebaseToken, authorizeRole } = require('../server/middleware/authMiddleware');
+const { setTenantContext } = require('../server/middleware/tenantMiddleware');
 const vatController = require('../server/controllers/vatController');
 
-router.get(
-  '/settings',
-  authorizeRole('admin', 'accountant'),
-  vatController.getSettings
-);
+// All VAT routes require authentication
+router.use(verifyFirebaseToken);
+// All routes require tenant context
+router.use(setTenantContext);
 
-router.put(
-  '/settings',
-  authorizeRole('admin', 'accountant'),
-  vatController.updateSettingsHandler
-);
+// Compute endpoint is available to all authenticated users (for invoice preview)
+router.post('/compute', vatController.computeVatPreview);
 
-router.get(
-  '/summary',
-  authorizeRole('admin', 'accountant'),
-  vatController.getSummary
-);
+// Other routes require admin/accountant role
+router.use(authorizeRole('admin', 'accountant'));
 
-router.get(
-  '/report',
-  authorizeRole('admin', 'accountant'),
-  vatController.getReport
-);
-
-router.post(
-  '/compute',
-  authorizeRole('admin', 'accountant'),
-  vatController.computeVatPreview
-);
-
-router.post(
-  '/adjustment',
-  authorizeRole('admin', 'accountant'),
-  vatController.createAdjustmentHandler
-);
-
-router.get(
-  '/filing-deadline',
-  authorizeRole('admin', 'accountant'),
-  vatController.getFilingDeadline
-);
+router.get('/settings', vatController.getSettings);
+router.put('/settings', vatController.updateSettingsHandler);
+router.get('/summary', vatController.getSummary);
+router.get('/report', vatController.getReport);
+router.post('/adjustment', vatController.createAdjustmentHandler);
+router.get('/filing-deadline', vatController.getFilingDeadline);
 
 module.exports = router;
 

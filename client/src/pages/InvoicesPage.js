@@ -10,19 +10,32 @@ import StatusBadge from "../components/StatusBadge";
 import { formatCurrency } from "../utils/formatters";
 import useAuth from "../hooks/useAuth";
 
+// Payment methods will be translated in component using t()
+const PAYMENT_METHODS = [
+  { value: "cash", labelKey: "invoices.paymentMethods.cash" },
+  { value: "bank_transfer", labelKey: "invoices.paymentMethods.bankTransfer" },
+  { value: "cheque", labelKey: "invoices.paymentMethods.cheque" },
+  { value: "credit_card", labelKey: "invoices.paymentMethods.creditCard" },
+  { value: "debit_card", labelKey: "invoices.paymentMethods.debitCard" },
+  { value: "online", labelKey: "invoices.paymentMethods.online" },
+  { value: "other", labelKey: "invoices.paymentMethods.other" }
+];
+
 const createEmptyItem = () => ({
   description: "",
   quantity: 1,
   unitPrice: 0,
-  discount: 0
+  discount: 0,
+  vatType: "standard" // standard, zero, exempt
 });
 
+// Payment terms will be translated in component using t()
 const PAYMENT_TERMS_OPTIONS = [
-  { value: "7 days", label: "7 Days" },
-  { value: "14 days", label: "14 Days" },
-  { value: "30 days", label: "30 Days" },
-  { value: "60 days", label: "60 Days" },
-  { value: "custom", label: "Custom" }
+  { value: "7 days", labelKey: "invoices.paymentTermsOptions.7days" },
+  { value: "14 days", labelKey: "invoices.paymentTermsOptions.14days" },
+  { value: "30 days", labelKey: "invoices.paymentTermsOptions.30days" },
+  { value: "60 days", labelKey: "invoices.paymentTermsOptions.60days" },
+  { value: "custom", labelKey: "invoices.paymentTermsOptions.custom" }
 ];
 
 export default function InvoicesPage({ language }) {
@@ -38,6 +51,7 @@ export default function InvoicesPage({ language }) {
   const [sortBy, setSortBy] = useState("issueDate");
   const [sortOrder, setSortOrder] = useState("DESC");
   const [showForm, setShowForm] = useState(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [form, setForm] = useState({
     invoiceNumber: "",
@@ -52,13 +66,39 @@ export default function InvoicesPage({ language }) {
     notes: "",
     status: "draft",
     items: [createEmptyItem()],
-    totalDiscount: 0
+    totalDiscount: 0,
+    vatType: "standard", // Invoice-level VAT type
+    supplierTRN: "",
+    customerTRN: ""
   });
+  const [vatBreakdown, setVatBreakdown] = useState(null);
+  const [loadingVatPreview, setLoadingVatPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [viewingInvoice, setViewingInvoice] = useState(null);
+  const [invoicePayments, setInvoicePayments] = useState([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    paymentDate: dayjs().format("YYYY-MM-DD"),
+    paymentAmount: "",
+    paymentMethod: "bank_transfer",
+    currency: "AED",
+    referenceNumber: "",
+    transactionId: "",
+    bankName: "",
+    bankAccount: "",
+    notes: ""
+  });
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState(null);
 
   const isAdmin = role === "admin";
+
+  // Debug: Log when vatBreakdown changes
+  useEffect(() => {
+    console.log('[Invoice] vatBreakdown state changed:', vatBreakdown);
+  }, [vatBreakdown]);
 
   // Calculate due date based on payment terms
   const dueDate = useMemo(() => {
@@ -76,8 +116,22 @@ export default function InvoicesPage({ language }) {
     return issue.add(days, "day").format("YYYY-MM-DD");
   }, [form.issueDate, form.paymentTerms, form.customDays]);
 
-  // Calculate totals
+  // Calculate totals - use VAT breakdown if available, otherwise calculate locally
   const totals = useMemo(() => {
+    if (vatBreakdown) {
+      return {
+        subtotal: vatBreakdown.subtotal || 0,
+        totalDiscount: vatBreakdown.discountTotal || form.totalDiscount || 0,
+        discountedSubtotal: (vatBreakdown.taxableSubtotal || 0) + (vatBreakdown.zeroRatedSubtotal || 0) + (vatBreakdown.exemptSubtotal || 0) - (vatBreakdown.discountTotal || 0),
+        vat: vatBreakdown.vatAmount || 0,
+        grandTotal: vatBreakdown.totalWithVAT || 0,
+        taxableSubtotal: vatBreakdown.taxableSubtotal || 0,
+        zeroRatedSubtotal: vatBreakdown.zeroRatedSubtotal || 0,
+        exemptSubtotal: vatBreakdown.exemptSubtotal || 0
+      };
+    }
+    
+    // Fallback calculation
     const subtotal = form.items.reduce(
       (sum, item) => sum + (item.quantity || 0) * (item.unitPrice || 0) - (item.discount || 0),
       0
@@ -93,9 +147,93 @@ export default function InvoicesPage({ language }) {
       vat,
       grandTotal
     };
-  }, [form.items, form.totalDiscount]);
+  }, [form.items, form.totalDiscount, vatBreakdown]);
 
-  const loadInvoices = async () => {
+  // Compute VAT preview
+  const handlePreviewVat = async () => {
+    // Validate that there are items with valid data
+    const validItems = form.items.filter(
+      item => item.description && (Number(item.quantity) || 0) > 0 && (Number(item.unitPrice) || 0) > 0
+    );
+    
+    if (validItems.length === 0) {
+      alert(t("invoices.addItemBeforeVat"));
+      return;
+    }
+    
+    setLoadingVatPreview(true);
+    setError(null);
+    try {
+      console.log('[Invoice] Computing VAT with payload:', {
+        vatType: form.vatType,
+        supplierTRN: form.supplierTRN,
+        customerTRN: form.customerTRN,
+        totalDiscount: form.totalDiscount,
+        itemsCount: validItems.length
+      });
+      
+      const response = await apiClient.post("/vat/compute", {
+        vatType: form.vatType,
+        supplierTRN: form.supplierTRN,
+        customerTRN: form.customerTRN,
+        totalDiscount: form.totalDiscount || 0,
+        items: validItems.map((item) => ({
+          description: item.description,
+          quantity: Number(item.quantity) || 0,
+          unitPrice: Number(item.unitPrice) || 0,
+          discount: Number(item.discount) || 0,
+          vatType: item.vatType || form.vatType
+        }))
+      });
+      
+      const data = response.data;
+      console.log('[Invoice] VAT computed successfully:', data);
+      console.log('[Invoice] Full response data:', JSON.stringify(data, null, 2));
+      
+      // Ensure we have all required fields with defaults
+      const breakdownData = {
+        taxableSubtotal: data.taxableSubtotal || 0,
+        zeroRatedSubtotal: data.zeroRatedSubtotal || 0,
+        exemptSubtotal: data.exemptSubtotal || 0,
+        vatAmount: data.vatAmount || 0,
+        totalWithVAT: data.totalWithVAT || 0,
+        subtotal: data.subtotal || 0,
+        discountTotal: data.discountTotal || 0,
+        vatType: data.vatType || form.vatType
+      };
+      
+      console.log('[Invoice] Setting vatBreakdown state with:', breakdownData);
+      
+      setVatBreakdown(breakdownData);
+      setError(null);
+      
+      // Scroll to breakdown section after state update
+      setTimeout(() => {
+        const breakdownElement = document.querySelector('[data-vat-breakdown]');
+        if (breakdownElement) {
+          breakdownElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        console.log('[Invoice] VAT breakdown state updated. Current vatBreakdown:', breakdownData);
+      }, 300);
+    } catch (err) {
+      console.error("Error computing VAT:", err);
+      console.error("Error response:", err?.response);
+      const errorMessage = err?.response?.data?.message || err?.message || t("invoices.failedToComputeVat");
+      setError(errorMessage);
+      setVatBreakdown(null);
+      alert(`${t("common.error")}: ${errorMessage}`);
+    } finally {
+      setLoadingVatPreview(false);
+    }
+  };
+
+  const loadInvoices = async (skipIfUpdating = true) => {
+    // Skip reload if we're in the middle of updating a status
+    if (skipIfUpdating && isUpdatingStatus) {
+      console.log("[Invoice] Skipping reload - status update in progress");
+      return;
+    }
+    
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -109,11 +247,36 @@ export default function InvoicesPage({ language }) {
       if (statusFilter) params.append("status", statusFilter);
 
       const { data } = await apiClient.get(`/invoices?${params.toString()}`);
-      setInvoices(data.invoices || data || []);
+      const invoicesList = data.invoices || data || [];
+      
+      // Log the statuses of all invoices to debug - expand the array
+      const statusSummary = invoicesList.map(inv => ({
+        id: inv.id || inv._id,
+        invoiceNumber: inv.invoiceNumber,
+        status: inv.status
+      }));
+      console.log("[Invoice] Loaded invoices from server:", statusSummary);
+      console.log("[Invoice] Full invoice list:", JSON.stringify(statusSummary, null, 2));
+      
+      // Specifically check invoice 18
+      const invoice18 = invoicesList.find(inv => (inv.id || inv._id) === 18);
+      if (invoice18) {
+        console.log("[Invoice] 🔍 Invoice 18 status from server:", invoice18.status);
+        console.log("[Invoice] 🔍 Invoice 18 full object:", JSON.stringify({
+          id: invoice18.id || invoice18._id,
+          invoiceNumber: invoice18.invoiceNumber,
+          status: invoice18.status,
+          dueDate: invoice18.dueDate
+        }, null, 2));
+      } else {
+        console.log("[Invoice] ⚠️ Invoice 18 not found in loaded list");
+      }
+      
+      setInvoices(invoicesList);
       setTotalInvoices(data.total || (Array.isArray(data) ? data.length : 0));
     } catch (err) {
       console.error("Error loading invoices:", err);
-      setError(err?.response?.data?.message || "Failed to load invoices");
+      setError(err?.response?.data?.message || t("invoices.failedToLoad"));
       setInvoices([]);
     } finally {
       setLoading(false);
@@ -121,12 +284,16 @@ export default function InvoicesPage({ language }) {
   };
 
   useEffect(() => {
-    loadInvoices();
+    // Skip reload if we're updating a status to prevent overwriting the update
+    if (!isUpdatingStatus) {
+      loadInvoices();
+    }
   }, [currentPage, searchTerm, statusFilter, sortBy, sortOrder]);
 
   useEffect(() => {
     setForm((prev) => ({ ...prev, language }));
   }, [language]);
+
 
   const handleItemChange = (index, field, value) => {
     setForm((prev) => {
@@ -170,8 +337,12 @@ export default function InvoicesPage({ language }) {
       notes: "",
       status: "draft",
       items: [createEmptyItem()],
-      totalDiscount: 0
+      totalDiscount: 0,
+      vatType: "standard",
+      supplierTRN: "",
+      customerTRN: ""
     });
+    setVatBreakdown(null);
     setEditingInvoice(null);
     setShowForm(false);
     setError(null);
@@ -191,26 +362,117 @@ export default function InvoicesPage({ language }) {
       currency: invoice.currency || "AED",
       notes: invoice.notes || "",
       status: invoice.status || "draft",
-      items: invoice.items && invoice.items.length > 0 ? invoice.items : [createEmptyItem()],
-      totalDiscount: invoice.totalDiscount || 0
+      items: invoice.items && invoice.items.length > 0 
+        ? invoice.items.map(item => ({ ...item, vatType: item.vatType || "standard" }))
+        : [createEmptyItem()],
+      totalDiscount: invoice.totalDiscount || 0,
+      vatType: invoice.vatType || "standard",
+      supplierTRN: invoice.supplierTRN || "",
+      customerTRN: invoice.customerTRN || ""
     });
+    setVatBreakdown(null);
     setShowForm(true);
+  };
+
+  // Load payments for a specific invoice
+  const loadInvoicePayments = async (invoiceId) => {
+    setLoadingPayments(true);
+    try {
+      const paymentsRes = await apiClient.get(`/payments/invoice/${invoiceId}`);
+      setInvoicePayments(paymentsRes.data || []);
+    } catch (paymentsErr) {
+      console.error("Error loading payments:", paymentsErr);
+      setInvoicePayments([]);
+    } finally {
+      setLoadingPayments(false);
+    }
   };
 
   const handleView = async (invoice) => {
     try {
       const { data } = await apiClient.get(`/invoices/${invoice.id || invoice._id}`);
       setViewingInvoice(data);
+      
+      // Load payments for this invoice
+      await loadInvoicePayments(invoice.id || invoice._id);
+      
+      // Pre-fill payment form with outstanding amount
+      const outstanding = parseFloat(data.outstandingAmount || data.totalWithVAT || 0);
+      setPaymentForm({
+        paymentDate: dayjs().format("YYYY-MM-DD"),
+        paymentAmount: outstanding > 0 ? outstanding.toFixed(2) : "",
+        paymentMethod: "bank_transfer",
+        currency: data.currency || "AED",
+        referenceNumber: "",
+        transactionId: "",
+        bankName: "",
+        bankAccount: "",
+        notes: ""
+      });
+      setShowPaymentForm(false);
+      setPaymentError(null);
     } catch (err) {
       console.error("Error loading invoice:", err);
-      alert("Failed to load invoice details");
+      alert(t("invoices.failedToLoadDetails"));
+    }
+  };
+
+  // Handle payment creation from invoice view
+  const handleCreatePayment = async (e) => {
+    e.preventDefault();
+    if (!viewingInvoice) return;
+
+    setSavingPayment(true);
+    setPaymentError(null);
+
+    try {
+      if (!paymentForm.paymentAmount || parseFloat(paymentForm.paymentAmount) <= 0) {
+        throw new Error(t("invoices.paymentAmountRequired"));
+      }
+
+      const paymentData = {
+        invoiceId: viewingInvoice.id || viewingInvoice._id,
+        ...paymentForm,
+        paymentAmount: parseFloat(paymentForm.paymentAmount)
+      };
+
+      const response = await apiClient.post("/payments", paymentData);
+      
+      // Reload invoice to get updated balances
+      const { data: updatedInvoice } = await apiClient.get(`/invoices/${viewingInvoice.id || viewingInvoice._id}`);
+      setViewingInvoice(updatedInvoice);
+      
+      // Reload payments
+      await loadInvoicePayments(viewingInvoice.id || viewingInvoice._id);
+      
+      // Reset form
+      const outstanding = parseFloat(updatedInvoice.outstandingAmount || updatedInvoice.totalWithVAT || 0);
+      setPaymentForm({
+        paymentDate: dayjs().format("YYYY-MM-DD"),
+        paymentAmount: outstanding > 0 ? outstanding.toFixed(2) : "",
+        paymentMethod: "bank_transfer",
+        currency: updatedInvoice.currency || "AED",
+        referenceNumber: "",
+        transactionId: "",
+        bankName: "",
+        bankAccount: "",
+        notes: ""
+      });
+      setShowPaymentForm(false);
+      
+      alert(t("invoices.paymentRecorded"));
+    } catch (err) {
+      console.error("Failed to create payment:", err);
+      setPaymentError(err.response?.data?.message || err.message || t("invoices.failedToCreatePayment"));
+    } finally {
+      setSavingPayment(false);
     }
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!isAdmin) {
-      alert("Only administrators can create invoices");
+      alert(t("invoices.onlyAdminCreate"));
       return;
     }
 
@@ -230,11 +492,15 @@ export default function InvoicesPage({ language }) {
         notes: form.notes,
         status: form.status,
         totalDiscount: form.totalDiscount || 0,
+        vatType: form.vatType,
+        supplierTRN: form.supplierTRN,
+        customerTRN: form.customerTRN,
         items: form.items.map((item) => ({
           description: item.description,
           quantity: Number(item.quantity) || 0,
           unitPrice: Number(item.unitPrice) || 0,
-          discount: Number(item.discount) || 0
+          discount: Number(item.discount) || 0,
+          vatType: item.vatType || form.vatType
         }))
       };
 
@@ -252,7 +518,7 @@ export default function InvoicesPage({ language }) {
       await loadInvoices();
     } catch (err) {
       console.error("Invoice save error:", err);
-      setError(err?.response?.data?.message || err.message || "Failed to save invoice");
+      setError(err?.response?.data?.message || err.message || t("invoices.failedToSave"));
     } finally {
       setSaving(false);
     }
@@ -260,11 +526,11 @@ export default function InvoicesPage({ language }) {
 
   const handleDelete = async (invoice) => {
     if (!isAdmin) {
-      alert("Only administrators can delete invoices");
+      alert(t("invoices.onlyAdminDelete"));
       return;
     }
 
-    if (!window.confirm(`Are you sure you want to delete invoice ${invoice.invoiceNumber || invoice.id}?`)) {
+    if (!window.confirm(t("invoices.deleteConfirm", { invoiceNumber: invoice.invoiceNumber || invoice.id }))) {
       return;
     }
 
@@ -273,32 +539,137 @@ export default function InvoicesPage({ language }) {
       await loadInvoices();
     } catch (err) {
       console.error("Error deleting invoice:", err);
-      alert(err?.response?.data?.message || "Failed to delete invoice");
+      alert(err?.response?.data?.message || t("invoices.failedToDelete"));
     }
   };
 
   const handleStatusChange = async (invoice, newStatus) => {
     if (!isAdmin) {
-      alert("Only administrators can change invoice status");
+      alert(t("invoices.onlyAdminChangeStatus"));
       return;
     }
 
+    const invoiceId = invoice.id || invoice._id;
+    if (!invoiceId) {
+      alert(t("invoices.invalidInvoiceId"));
+      return;
+    }
+
+    const oldStatus = invoice.status;
+    setIsUpdatingStatus(true);
+
+    // Optimistically update the UI immediately
+    setInvoices((prev) =>
+      prev.map((inv) => {
+        const invId = inv.id || inv._id;
+        if (invId === invoiceId) {
+          console.log("[Invoice] Optimistic update:", invId, oldStatus, "->", newStatus);
+          return { ...inv, status: newStatus };
+        }
+        return inv;
+      })
+    );
+
     try {
-      const { data } = await apiClient.patch(`/invoices/${invoice.id || invoice._id}/status`, {
+      console.log("[Invoice] Updating status:", { invoiceId, oldStatus, newStatus });
+      const { data } = await apiClient.patch(`/invoices/${invoiceId}/status`, {
         status: newStatus
       });
-      setInvoices((prev) =>
-        prev.map((inv) => (inv.id === data.id ? data : inv))
-      );
+      
+      console.log("[Invoice] Status update response:", data);
+      console.log("[Invoice] Response data ID:", data?.id, "Type:", typeof data?.id);
+      
+      // Update with the response from server - ensure we use the correct ID format
+      // Create a completely new array to force React to detect the change
+      setInvoices((prev) => {
+        const responseId = data?.id || data?._id;
+        const responseStatus = data?.status || newStatus;
+        
+        console.log("[Invoice] Matching invoice:", {
+          invoiceId,
+          responseId,
+          responseStatus,
+          invoiceIds: prev.map(inv => inv.id || inv._id)
+        });
+        
+        // Create a new array with updated invoice
+        const updated = prev.map((inv) => {
+          const invId = inv.id || inv._id;
+          
+          // Match by ID - handle both number and string comparisons
+          const idsMatch = 
+            invId === invoiceId || 
+            invId === responseId ||
+            String(invId) === String(invoiceId) ||
+            String(invId) === String(responseId) ||
+            Number(invId) === Number(invoiceId) ||
+            Number(invId) === Number(responseId);
+          
+          if (idsMatch) {
+            console.log("[Invoice] ✓ Matched invoice:", invId, "Updating status to:", responseStatus);
+            // Create a completely new object to force React re-render
+            const newInvoice = {
+              ...inv,
+              ...data,
+              status: responseStatus,
+              id: responseId || invId,
+              _id: responseId || invId
+            };
+            console.log("[Invoice] New invoice object status:", newInvoice.status);
+            return newInvoice;
+          }
+          // Return existing invoice (new reference to ensure React detects change)
+          return { ...inv };
+        });
+        
+        const updatedInvoice = updated.find(inv => {
+          const invId = inv.id || inv._id;
+          return invId === invoiceId || invId === responseId ||
+                 String(invId) === String(invoiceId) || String(invId) === String(responseId);
+        });
+        
+        console.log("[Invoice] Final status check:", {
+          invoiceId,
+          found: !!updatedInvoice,
+          status: updatedInvoice?.status,
+          allStatuses: updated.map(inv => ({ id: inv.id || inv._id, status: inv.status }))
+        });
+        
+        // Return new array to force React to detect the change
+        return [...updated];
+      });
+      
+      setIsUpdatingStatus(false);
+      
+      // Don't reload immediately - the state update should be sufficient
+      // The optimistic update + server response merge should keep the UI in sync
+      // Only reload as a last resort if there's a mismatch
+      
     } catch (err) {
       console.error("Error updating status:", err);
-      alert(err?.response?.data?.message || "Failed to update status");
+      console.error("Error details:", err.response?.data);
+      
+      setIsUpdatingStatus(false);
+      
+      // Revert optimistic update on error
+      setInvoices((prev) =>
+        prev.map((inv) => {
+          const invId = inv.id || inv._id;
+          if (invId === invoiceId) {
+            return { ...inv, status: oldStatus }; // Revert to original status
+          }
+          return inv;
+        })
+      );
+      
+      alert(err?.response?.data?.message || t("invoices.failedToUpdateStatus"));
     }
   };
 
   const handleDownloadPdf = async (invoice) => {
     try {
       const response = await apiClient.get(`/invoices/${invoice.id || invoice._id}/pdf`, {
+        params: { lang: language },
         responseType: "blob"
       });
 
@@ -312,7 +683,7 @@ export default function InvoicesPage({ language }) {
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Error downloading PDF:", err);
-      alert("Failed to download PDF");
+      alert(t("invoices.failedToDownloadPdf"));
     }
   };
 
@@ -371,13 +742,13 @@ export default function InvoicesPage({ language }) {
                     if (!editingInvoice) return; // Don't allow changes when creating
                     setForm((prev) => ({ ...prev, invoiceNumber: e.target.value }));
                   }}
-                  placeholder="AUTO: INV-YYYY-XXXX"
+                  placeholder={t("invoices.invoiceNumberAuto")}
                   disabled={true}
                   readOnly={true}
-                  title={editingInvoice ? "Invoice number cannot be changed" : "Invoice number will be auto-generated"}
+                  title={editingInvoice ? t("invoices.invoiceNumberCannotChange") : t("invoices.invoiceNumberAutoGenerated")}
                 />
                 <p className="mt-1 text-xs text-slate-500">
-                  {editingInvoice ? "Invoice number cannot be changed" : "Will be auto-generated (INV-YYYY-XXXX)"}
+                  {editingInvoice ? t("invoices.invoiceNumberCannotChange") : t("invoices.invoiceNumberAutoGenerated")}
                 </p>
               </div>
               <div>
@@ -437,7 +808,7 @@ export default function InvoicesPage({ language }) {
                 >
                   {PAYMENT_TERMS_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </option>
                   ))}
                 </select>
@@ -453,7 +824,7 @@ export default function InvoicesPage({ language }) {
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                     value={form.customDays}
                     onChange={(e) => setForm((prev) => ({ ...prev, customDays: e.target.value }))}
-                    placeholder="Enter days"
+                    placeholder={t("invoices.enterDays")}
                   />
                 </div>
               )}
@@ -496,6 +867,70 @@ export default function InvoicesPage({ language }) {
                   <option value="sent">{t("invoices.statusSent")}</option>
                   <option value="paid">{t("invoices.statusPaid")}</option>
                 </select>
+              </div>
+            </div>
+
+            {/* VAT Information */}
+            <div className="rounded-xl border border-slate-200 bg-blue-50 p-4">
+              <h3 className="mb-3 text-sm font-semibold text-slate-700">{t("invoices.vatInformation")}</h3>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-600">
+                    {t("invoices.invoiceVatType")}
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={form.vatType}
+                    onChange={(e) => {
+                      setForm((prev) => ({ ...prev, vatType: e.target.value }));
+                      setVatBreakdown(null);
+                    }}
+                  >
+                    <option value="standard">{t("invoices.standard")}</option>
+                    <option value="zero">{t("invoices.zeroRated")}</option>
+                    <option value="exempt">{t("invoices.exempt")}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-600">
+                    {t("invoices.supplierTRN")}
+                  </label>
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={form.supplierTRN}
+                    onChange={(e) => {
+                      setForm((prev) => ({ ...prev, supplierTRN: e.target.value }));
+                      setVatBreakdown(null);
+                    }}
+                    placeholder={t("invoices.yourCompanyTRN")}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-600">
+                    {t("invoices.customerTRN")}
+                  </label>
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={form.customerTRN}
+                    onChange={(e) => {
+                      setForm((prev) => ({ ...prev, customerTRN: e.target.value }));
+                      setVatBreakdown(null);
+                    }}
+                    placeholder={t("invoices.customerTRNOptional")}
+                  />
+                </div>
+              </div>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={handlePreviewVat}
+                  disabled={loadingVatPreview}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {loadingVatPreview ? t("invoices.computing") : t("invoices.previewVat")}
+                </button>
               </div>
             </div>
 
@@ -566,8 +1001,28 @@ export default function InvoicesPage({ language }) {
                       step="0.01"
                       className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                       value={item.discount}
-                      onChange={(e) => handleItemChange(idx, "discount", e.target.value)}
+                      onChange={(e) => {
+                        handleItemChange(idx, "discount", e.target.value);
+                        setVatBreakdown(null);
+                      }}
                     />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs font-medium text-slate-500">
+                      VAT Type
+                    </label>
+                    <select
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      value={item.vatType || form.vatType}
+                      onChange={(e) => {
+                        handleItemChange(idx, "vatType", e.target.value);
+                        setVatBreakdown(null);
+                      }}
+                    >
+                    <option value="standard">{t("invoices.standard")}</option>
+                    <option value="zero">{t("invoices.zeroRated")}</option>
+                    <option value="exempt">{t("invoices.exempt")}</option>
+                    </select>
                   </div>
                   <div className="md:col-span-1 flex items-end">
                     <button
@@ -612,7 +1067,54 @@ export default function InvoicesPage({ language }) {
             </div>
 
             {/* Totals Summary */}
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm" data-vat-breakdown>
+              {vatBreakdown && (
+                <div className="mb-4 rounded-lg border-2 border-blue-400 bg-blue-50 p-4 shadow-md">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-sm font-bold text-blue-900">✓ {t("invoices.vatBreakdown")}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        console.log('[Invoice] Clearing VAT breakdown');
+                        setVatBreakdown(null);
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800 underline"
+                    >
+                      {t("invoices.clear")}
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {totals.taxableSubtotal > 0 ? (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-700 font-medium">{t("invoices.taxableSubtotal")}</span>
+                        <span className="font-semibold text-slate-900">{formatCurrency(totals.taxableSubtotal, language === "ar" ? "ar-AE" : "en-AE")}</span>
+                      </div>
+                    ) : null}
+                    {totals.zeroRatedSubtotal > 0 ? (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-700 font-medium">{t("invoices.zeroRatedSubtotal")}</span>
+                        <span className="font-semibold text-slate-900">{formatCurrency(totals.zeroRatedSubtotal, language === "ar" ? "ar-AE" : "en-AE")}</span>
+                      </div>
+                    ) : null}
+                    {totals.exemptSubtotal > 0 ? (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-700 font-medium">{t("invoices.exemptSubtotal")}</span>
+                        <span className="font-semibold text-slate-900">{formatCurrency(totals.exemptSubtotal, language === "ar" ? "ar-AE" : "en-AE")}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-blue-200">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-700 font-medium">{t("invoices.vatAmount")} (5%)</span>
+                      <span className="font-bold text-blue-700">{formatCurrency(totals.vat, language === "ar" ? "ar-AE" : "en-AE")}</span>
+                    </div>
+                    <div className="mt-1 flex justify-between text-xs text-slate-500">
+                      <span>{t("invoices.totalWithVAT")}</span>
+                      <span className="font-semibold">{formatCurrency(totals.grandTotal, language === "ar" ? "ar-AE" : "en-AE")}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-600">{t("invoices.subtotal")}</span>
                 <span className="font-medium">{formatCurrency(totals.subtotal, language === "ar" ? "ar-AE" : "en-AE")}</span>
@@ -624,7 +1126,7 @@ export default function InvoicesPage({ language }) {
                 </div>
               )}
               <div className="mt-2 flex justify-between">
-                <span className="text-slate-600">{t("invoices.vat")}</span>
+                <span className="text-slate-600">{t("invoices.vat")} {vatBreakdown && "(5%)"}</span>
                 <span className="font-medium">{formatCurrency(totals.vat, language === "ar" ? "ar-AE" : "en-AE")}</span>
               </div>
               <div className="mt-3 flex justify-between border-t border-slate-300 pt-2">
@@ -635,7 +1137,7 @@ export default function InvoicesPage({ language }) {
 
             {error && (
               <div className="rounded-lg bg-red-50 p-4 text-red-800">
-                <strong>Error:</strong> {error}
+                <strong>{t("common.error")}:</strong> {error}
               </div>
             )}
 
@@ -665,7 +1167,7 @@ export default function InvoicesPage({ language }) {
           <div>
             <input
               type="text"
-              placeholder={t("common.search") + "..."}
+              placeholder={t("invoices.searchPlaceholder")}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
               value={searchTerm}
               onChange={(e) => {
@@ -782,9 +1284,16 @@ export default function InvoicesPage({ language }) {
                               PDF
                             </button>
                             <select
-                              value={invoice.status}
-                              onChange={(e) => handleStatusChange(invoice, e.target.value)}
-                              className="rounded border border-slate-300 px-2 py-1 text-xs"
+                              key={`status-${invoice.id || invoice._id}-${invoice.status || 'draft'}`}
+                              value={invoice.status || "draft"}
+                              onChange={(e) => {
+                                e.preventDefault();
+                                handleStatusChange(invoice, e.target.value);
+                              }}
+                              disabled={!isAdmin}
+                              className={`rounded border border-slate-300 px-2 py-1 text-xs ${
+                                !isAdmin ? "opacity-50 cursor-not-allowed" : ""
+                              }`}
                             >
                               <option value="draft">{t("invoices.statusDraft")}</option>
                               <option value="sent">{t("invoices.statusSent")}</option>
@@ -877,8 +1386,211 @@ export default function InvoicesPage({ language }) {
                 )}
                 <div>
                   <p className="text-sm text-slate-500">{t("invoices.total")}</p>
-                  <p className="font-semibold text-lg">{formatCurrency(viewingInvoice.total, language === "ar" ? "ar-AE" : "en-AE")}</p>
+                  <p className="font-semibold text-lg">{formatCurrency(viewingInvoice.totalWithVAT || viewingInvoice.total, language === "ar" ? "ar-AE" : "en-AE")}</p>
                 </div>
+                {viewingInvoice.paidAmount !== undefined && (
+                  <div>
+                    <p className="text-sm text-slate-500">{t("invoices.paidAmount")}</p>
+                    <p className="font-semibold text-green-600">{formatCurrency(viewingInvoice.paidAmount || 0, language === "ar" ? "ar-AE" : "en-AE")}</p>
+                  </div>
+                )}
+                {viewingInvoice.outstandingAmount !== undefined && (
+                  <div>
+                    <p className="text-sm text-slate-500">{t("invoices.outstanding")}</p>
+                    <p className="font-semibold text-orange-600">{formatCurrency(viewingInvoice.outstandingAmount || 0, language === "ar" ? "ar-AE" : "en-AE")}</p>
+                  </div>
+                )}
+              </div>
+              
+              {/* Payments Section */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold">{t("invoices.paymentHistory")}</h3>
+                  {isAdmin && viewingInvoice.status !== "draft" && (
+                    <button
+                      onClick={() => setShowPaymentForm(!showPaymentForm)}
+                      className="text-sm font-medium text-primary hover:text-primary-dark"
+                    >
+                      {showPaymentForm ? t("common.cancel") : `+ ${t("invoices.recordPayment")}`}
+                    </button>
+                  )}
+                </div>
+                
+                {/* Payment Form */}
+                {showPaymentForm && (
+                  <div className="mb-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <form onSubmit={handleCreatePayment}>
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.paymentDate")}
+                          </label>
+                          <input
+                            type="date"
+                            value={paymentForm.paymentDate}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentDate: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.paymentAmount")} *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max={viewingInvoice.outstandingAmount || viewingInvoice.totalWithVAT || 0}
+                            value={paymentForm.paymentAmount}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentAmount: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.paymentMethod")} *
+                          </label>
+                          <select
+                            value={paymentForm.paymentMethod}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            required
+                          >
+                            {PAYMENT_METHODS.map(method => (
+                              <option key={method.value} value={method.value}>
+                                {t(method.labelKey)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.referenceNumber")}
+                          </label>
+                          <input
+                            type="text"
+                            value={paymentForm.referenceNumber}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, referenceNumber: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            placeholder={t("invoices.optional")}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.transactionId")}
+                          </label>
+                          <input
+                            type="text"
+                            value={paymentForm.transactionId}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, transactionId: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            placeholder={t("invoices.optional")}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.bankName")}
+                          </label>
+                          <input
+                            type="text"
+                            value={paymentForm.bankName}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, bankName: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            placeholder={t("invoices.optional")}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.bankAccount")}
+                          </label>
+                          <input
+                            type="text"
+                            value={paymentForm.bankAccount}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, bankAccount: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            placeholder={t("invoices.optional")}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            {t("invoices.notes")}
+                          </label>
+                          <textarea
+                            value={paymentForm.notes}
+                            onChange={(e) => setPaymentForm(prev => ({ ...prev, notes: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                            rows="2"
+                            placeholder={t("invoices.optionalNotes")}
+                          />
+                        </div>
+                      </div>
+                      {paymentError && (
+                        <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                          {paymentError}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={savingPayment}
+                          className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-60"
+                        >
+                          {savingPayment ? t("invoices.saving") : t("invoices.recordPayment")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPaymentForm(false);
+                            setPaymentError(null);
+                          }}
+                          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+                {loadingPayments ? (
+                  <p className="text-sm text-slate-500">{t("invoices.loadingPayments")}</p>
+                ) : invoicePayments.length === 0 ? (
+                  <p className="text-sm text-slate-500">{t("invoices.noPayments")}</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-slate-200">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{t("invoices.paymentNumber")}</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{t("invoices.date")}</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{t("invoices.paymentAmount")}</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{t("invoices.method")}</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">{t("common.status")}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {invoicePayments.map((payment) => (
+                          <tr key={payment.id}>
+                            <td className="px-4 py-2 text-sm">{payment.paymentNumber}</td>
+                            <td className="px-4 py-2 text-sm">{dayjs(payment.paymentDate).format("DD MMM YYYY")}</td>
+                            <td className="px-4 py-2 text-sm font-medium">{formatCurrency(payment.paymentAmount, language === "ar" ? "ar-AE" : "en-AE")}</td>
+                            <td className="px-4 py-2 text-sm capitalize">{payment.paymentMethod?.replace("_", " ") || "N/A"}</td>
+                            <td className="px-4 py-2">
+                              <span className={`inline-block rounded-full px-2 py-1 text-xs font-medium ${
+                                payment.status === "confirmed" ? "bg-green-100 text-green-800" :
+                                payment.status === "pending" ? "bg-yellow-100 text-yellow-800" :
+                                "bg-gray-100 text-gray-800"
+                              }`}>
+                                {payment.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
               {viewingInvoice.items && viewingInvoice.items.length > 0 && (
                 <div>

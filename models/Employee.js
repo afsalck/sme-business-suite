@@ -122,6 +122,12 @@ const Employee = sequelize.define('Employee', {
     type: DataTypes.STRING,
     allowNull: true,
     field: 'createdByEmail'
+  },
+  companyId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+    comment: 'Company/tenant ID for multi-tenancy'
   }
 }, {
   tableName: 'employees',

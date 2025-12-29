@@ -128,6 +128,16 @@ const Invoice = sequelize.define('Invoice', {
     type: DataTypes.ENUM('draft', 'sent', 'viewed', 'paid', 'overdue', 'cancelled'),
     defaultValue: 'draft'
   },
+  paidAmount: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0
+  },
+  outstandingAmount: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0
+  },
   createdByUid: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -142,6 +152,12 @@ const Invoice = sequelize.define('Invoice', {
     type: DataTypes.STRING,
     allowNull: true,
     field: 'createdByEmail'
+  },
+  companyId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+    comment: 'Company/tenant ID for multi-tenancy'
   }
 }, {
   tableName: 'invoices',

@@ -9,10 +9,89 @@ body,
 }
 
 body {
-  @apply bg-slate-100 text-slate-900 font-sans;
+  @apply bg-slate-50 text-slate-900 font-sans antialiased;
 }
 
 .rtl {
   direction: rtl;
+}
+
+/* Enhanced UI Components */
+@layer components {
+  /* Smooth scrolling */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
+  
+  /* Enhanced focus styles */
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2;
+  }
+  
+  /* Page container */
+  .page-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+  
+  /* Section header */
+  .section-header {
+    @apply mb-6 flex items-center justify-between;
+  }
+  
+  .section-title {
+    @apply text-2xl font-bold text-slate-900;
+  }
+  
+  .section-description {
+    @apply mt-1 text-sm text-slate-600;
+  }
+  
+  /* Form sections */
+  .form-section {
+    @apply space-y-6;
+  }
+  
+  .form-grid {
+    @apply grid grid-cols-1 md:grid-cols-2 gap-6;
+  }
+  
+  /* Table enhancements */
+  .table-container {
+    @apply overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+  
+  .table {
+    @apply min-w-full divide-y divide-slate-200;
+  }
+  
+  .table thead {
+    @apply bg-slate-50;
+  }
+  
+  .table th {
+    @apply px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-700;
+  }
+  
+  .table td {
+    @apply px-6 py-4 whitespace-nowrap text-sm text-slate-900;
+  }
+  
+  .table tbody tr {
+    @apply hover:bg-slate-50 transition-colors duration-150;
+  }
+  
+  .table tbody tr:nth-child(even) {
+    @apply bg-slate-50/50;
+  }
+  
+  /* Card grid */
+  .card-grid {
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4;
+  }
+  
+  /* Loading skeleton */
+  .skeleton {
+    @apply animate-pulse bg-slate-200 rounded;
+  }
 }
 

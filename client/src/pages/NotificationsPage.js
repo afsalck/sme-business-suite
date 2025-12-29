@@ -42,6 +42,8 @@ export default function NotificationsPage({ language }) {
       setNotifications(prev =>
         prev.map(n => n.id === notificationId ? { ...n, status: 'read' } : n)
       );
+      // Refresh the page data to ensure count is accurate
+      // The unread count will be recalculated from the filtered notifications
     } catch (error) {
       console.error('[NotificationsPage] Error marking notification as read:', error);
     }
@@ -53,6 +55,8 @@ export default function NotificationsPage({ language }) {
       setNotifications(prev =>
         prev.map(n => ({ ...n, status: 'read' }))
       );
+      // Refresh notifications to get updated list
+      await fetchNotifications();
     } catch (error) {
       console.error('[NotificationsPage] Error marking all as read:', error);
     }

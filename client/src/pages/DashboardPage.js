@@ -113,51 +113,48 @@ export default function DashboardPage({ language }) {
     return [
       {
         label: t("dashboard.totalSales"),
-        value: formatCurrency(totals.totalSales ?? 0, language === "ar" ? "ar-AE" : "en-AE"),
-        accent: "bg-emerald-100"
+        value: formatCurrency(totals.totalSales || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "sales"
       },
       {
         label: t("dashboard.dailySales"),
-        value: formatCurrency(totals.dailySales ?? 0, language === "ar" ? "ar-AE" : "en-AE"),
-        accent: "bg-teal-100"
+        value: formatCurrency(totals.dailySales || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "sales"
       },
       {
         label: t("dashboard.totalExpenses"),
-        value: formatCurrency(
-          totals.totalExpenses ?? 0,
-          language === "ar" ? "ar-AE" : "en-AE"
-        ),
-        accent: "bg-rose-100"
+        value: formatCurrency(totals.totalExpenses || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "expenses"
       },
       {
         label: t("dashboard.dailyExpenses"),
-        value: formatCurrency(totals.dailyExpenses ?? 0, language === "ar" ? "ar-AE" : "en-AE"),
-        accent: "bg-pink-100"
+        value: formatCurrency(totals.dailyExpenses || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "expenses"
       },
       {
         label: t("dashboard.profit"),
-        value: formatCurrency(totals.profit ?? 0, language === "ar" ? "ar-AE" : "en-AE"),
-        accent: "bg-indigo-100"
+        value: formatCurrency(totals.profit || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "profit"
       },
       {
         label: t("dashboard.vatPayable"),
-        value: formatCurrency(totals.vatPayable ?? 0, language === "ar" ? "ar-AE" : "en-AE"),
-        accent: "bg-amber-100"
+        value: formatCurrency(totals.vatPayable || 0, language === "ar" ? "ar-AE" : "en-AE"),
+        colorScheme: "vat"
       },
       {
         label: t("dashboard.totalInvoices"),
         value: totals.totalInvoices ?? 0,
-        accent: "bg-blue-100"
+        colorScheme: "invoices"
       },
       {
         label: t("dashboard.paidInvoices"),
         value: totals.paidInvoices ?? 0,
-        accent: "bg-green-100"
+        colorScheme: "invoices"
       },
       {
         label: t("dashboard.overdueInvoices"),
         value: totals.overdueInvoices ?? 0,
-        accent: "bg-red-100"
+        colorScheme: "expenses"
       }
     ];
   }, [metrics, t, language]);
@@ -170,19 +167,19 @@ export default function DashboardPage({ language }) {
     return (
       <div className="space-y-4">
         <EmptyState
-          title={error.message || "Unable to load dashboard"}
+          title={error.message || t("dashboard.unableToLoad")}
           description={
             error.message?.includes("Cannot connect")
-              ? "Please check if the backend server is running on port 5004."
+              ? t("dashboard.checkBackendServer")
               : error.message?.includes("log in")
-              ? "Try logging out and logging back in."
-              : "Check your network connection or API settings."
+              ? t("dashboard.tryLoggingIn")
+              : t("dashboard.checkNetworkConnection")
           }
         />
         <DiagnosticInfo />
         {process.env.NODE_ENV === "development" && error.original && (
           <div className="rounded-lg bg-red-50 p-4 text-xs text-red-800">
-            <strong>Debug Info:</strong>
+            <strong>{t("dashboard.debugInfo")}</strong>
             <pre className="mt-2 overflow-auto">
               {JSON.stringify(
                 {
@@ -213,7 +210,7 @@ export default function DashboardPage({ language }) {
         <MetricCard
           label={t("dashboard.expiringDocs")}
           value={metrics?.totals?.expiringDocs ?? 0}
-          accent="bg-orange-100"
+          colorScheme="vat"
         />
       </div>
 
@@ -224,7 +221,7 @@ export default function DashboardPage({ language }) {
           </h3>
           <div className="h-64">
             {(!metrics?.charts?.salesTrend || metrics.charts.salesTrend.length === 0) ? (
-              <EmptyState title="No sales data" />
+              <EmptyState title={t("dashboard.noSalesData")} />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={metrics.charts.salesTrend}>
@@ -261,7 +258,7 @@ export default function DashboardPage({ language }) {
           </h3>
           <div className="h-64">
             {(!metrics?.charts?.expenseTrend || metrics.charts.expenseTrend.length === 0) ? (
-              <EmptyState title="No expense data" />
+              <EmptyState title={t("dashboard.noExpenseData")} />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={metrics.charts.expenseTrend}>

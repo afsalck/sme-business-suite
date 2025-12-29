@@ -1,5 +1,6 @@
 const { sendEmail } = require("./emailService");
 const { generateInvoicePdf } = require("./pdfService");
+const Company = require("../../models/Company");
 const companyConfig = require("../config/company");
 
 /**
@@ -14,15 +15,39 @@ async function sendInvoiceEmail(invoice) {
   }
 
   try {
-    // Generate PDF
-    const pdfArrayBuffer = await generateInvoicePdf(invoice);
+    // Get company information from database
+    let companyInfo = null;
+    try {
+      const company = await Company.findOne({ where: { companyId: 1 } });
+      if (company) {
+        const companyData = company.get({ plain: true });
+        companyInfo = {
+          name: companyData.name || companyData.shopName || "BizEase UAE",
+          shopName: companyData.shopName || companyData.name || "BizEase UAE",
+          address: companyData.address || "",
+          phone: companyData.phone || "",
+          email: companyData.email || "",
+          trn: companyData.trn || ""
+        };
+      }
+    } catch (companyError) {
+      console.warn("[Invoice Email] Could not fetch company info:", companyError.message);
+    }
+    
+    // Use company name from database if available, otherwise fallback to config
+    const companyName = companyInfo?.name || companyInfo?.shopName || companyConfig.companyName;
+    const companyEmail = companyInfo?.email || companyConfig.email;
+    const companyPhone = companyInfo?.phone || companyConfig.phone;
+    
+    // Generate PDF with company info
+    const pdfArrayBuffer = await generateInvoicePdf(invoice, companyInfo);
     const pdfBuffer = Buffer.from(pdfArrayBuffer);
     const pdfBase64 = pdfBuffer.toString("base64");
 
     const isArabic = invoice.language === "ar";
     const subject = isArabic 
-      ? `فاتورة ${invoice.invoiceNumber} من ${companyConfig.companyName}`
-      : `Invoice ${invoice.invoiceNumber} from ${companyConfig.companyName}`;
+      ? `فاتورة ${invoice.invoiceNumber} من ${companyName}`
+      : `Invoice ${invoice.invoiceNumber} from ${companyName}`;
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -54,7 +79,7 @@ async function sendInvoiceEmail(invoice) {
               <p><strong>${isArabic ? "رقم الفاتورة:" : "Invoice Number:"}</strong> ${invoice.invoiceNumber}</p>
               <p><strong>${isArabic ? "تاريخ الإصدار:" : "Issue Date:"}</strong> ${new Date(invoice.issueDate).toLocaleDateString()}</p>
               ${invoice.dueDate ? `<p><strong>${isArabic ? "تاريخ الاستحقاق:" : "Due Date:"}</strong> ${new Date(invoice.dueDate).toLocaleDateString()}</p>` : ""}
-              <p><strong>${isArabic ? "المبلغ الإجمالي:" : "Total Amount:"}</strong> ${parseFloat(invoice.total || 0).toFixed(2)} ${invoice.currency || "AED"}</p>
+              <p><strong>${isArabic ? "الإجمالي:" : "Total Amount:"}</strong> ${parseFloat(invoice.total || 0).toFixed(2)} ${invoice.currency || "AED"}</p>
               <p><strong>${isArabic ? "الحالة:" : "Status:"}</strong> ${invoice.status}</p>
             </div>
 
@@ -64,8 +89,8 @@ async function sendInvoiceEmail(invoice) {
           </div>
           <div class="footer">
             <p>${isArabic ? "مع تحياتنا" : "Best regards"},</p>
-            <p><strong>${companyConfig.companyName}</strong></p>
-            <p>${companyConfig.email} | ${companyConfig.phone}</p>
+            <p><strong>${companyName}</strong></p>
+            <p>${companyEmail} | ${companyPhone}</p>
           </div>
         </div>
       </body>

@@ -149,6 +149,13 @@ try {
 }
 
 try {
+  app.use("/api/company", require("../routes/companyRoutes"));
+  console.log("✓ Company routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load company routes:", error.message);
+}
+
+try {
   app.use("/api/hr", require("../routes/hrRoutes"));
   console.log("✓ HR routes loaded");
 } catch (error) {
@@ -164,10 +171,52 @@ try {
 }
 
 try {
+  app.use("/api/vat-filings", require("../routes/vatFilingRoutes"));
+  console.log("✓ VAT Filing routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load VAT Filing routes:", error.message);
+}
+
+try {
+  app.use("/api/kyc", require("../routes/kycRoutes"));
+  console.log("✓ KYC/AML routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load KYC/AML routes:", error.message);
+}
+
+try {
+  app.use("/api/reports", require("../routes/reportRoutes"));
+  console.log("✓ Reports & Analytics routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load Reports & Analytics routes:", error.message);
+}
+
+try {
   app.use("/api/notifications", require("../routes/notificationRoutes"));
   console.log("✓ Notification routes loaded");
 } catch (error) {
   console.error("✗ Failed to load notification routes:", error.message);
+}
+
+try {
+  app.use("/api/accounting", require("../routes/accountingRoutes"));
+  console.log("✓ Accounting routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load accounting routes:", error.message);
+}
+
+try {
+  app.use("/api/payroll", require("../routes/payrollRoutes"));
+  console.log("✓ Payroll routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load payroll routes:", error.message);
+}
+
+try {
+  app.use("/api/payments", require("../routes/paymentRoutes"));
+  console.log("✓ Payment routes loaded");
+} catch (error) {
+  console.error("✗ Failed to load payment routes:", error.message);
 }
 
 // 404 handler for API routes (must be LAST, after all routes are registered)
@@ -176,13 +225,13 @@ app.all("/api/*", (req, res) => {
   console.warn(`404 - Route not found: ${req.method} ${req.originalUrl}`);
   console.warn(`Request path: ${req.path}`);
   console.warn(`Request baseUrl: ${req.baseUrl}`);
-  console.warn(`Available routes: /api/auth, /api/invoices, /api/employees, /api/inventory, /api/expenses, /api/dashboard`);
+  console.warn(`Available routes: /api/auth, /api/invoices, /api/employees, /api/inventory, /api/expenses, /api/dashboard, /api/accounting, /api/payroll, /api/vat, /api/vat-filings, /api/payments, /api/kyc, /api/reports, /api/hr, /api/notifications`);
   
   res.status(404).json({ 
     message: "API endpoint not found",
     path: req.originalUrl,
     method: req.method,
-    availableRoutes: ["/api/auth", "/api/invoices", "/api/employees", "/api/inventory", "/api/expenses", "/api/dashboard"]
+    availableRoutes: ["/api/auth", "/api/invoices", "/api/employees", "/api/inventory", "/api/expenses", "/api/dashboard", "/api/accounting", "/api/payroll", "/api/vat", "/api/vat-filings", "/api/payments", "/api/kyc", "/api/reports", "/api/hr", "/api/notifications"]
   });
 });
 

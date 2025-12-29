@@ -6,6 +6,49 @@ const User = require("../../models/User");
 
 initializeFirebaseAdmin();
 
+/**
+ * Check if email belongs to a developer
+ * Developers can bypass domain restrictions
+ */
+function isDeveloperEmail(email) {
+  if (!email) return false;
+  
+  const emailLower = email.toLowerCase();
+  
+  // Check by email domain
+  const developerDomains = [
+    '@bizease.ae',
+    '@developer.com'
+  ];
+  
+  if (developerDomains.some(domain => emailLower.endsWith(domain))) {
+    return true;
+  }
+  
+  // Check by specific email addresses
+  const developerEmails = [
+    'developer@bizease.ae',
+    'admin@bizease.ae'
+  ];
+  
+  if (developerEmails.includes(emailLower)) {
+    return true;
+  }
+  
+  // Check by environment variable
+  if (process.env.DEVELOPER_EMAILS) {
+    const allowedEmails = process.env.DEVELOPER_EMAILS
+      .split(',')
+      .map(e => e.trim().toLowerCase());
+    
+    if (allowedEmails.includes(emailLower)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 async function verifyFirebaseToken(req, res, next) {
   console.log("=".repeat(60));
   console.log(`🔐 [AUTH] ${req.method} ${req.originalUrl}`);
@@ -64,6 +107,9 @@ async function verifyFirebaseToken(req, res, next) {
           { lastLoginAt: new Date(decodedToken.auth_time * 1000) },
           { where: { uid: decodedToken.uid } }
         ).catch(() => {}); // Ignore errors
+        
+        // Existing users are always allowed (they were created before domain restrictions)
+        // No need to check domain for existing users
       }
     } catch (dbError) {
       // Query failed or timed out - continue without blocking
@@ -73,11 +119,40 @@ async function verifyFirebaseToken(req, res, next) {
 
     // If user not found, create in background (non-blocking)
     if (!user) {
+      // ✅ Assign companyId based on email domain (multi-tenancy)
+      // Uses database mappings for dynamic configuration (no code changes needed!)
+      const { getCompanyIdFromEmail } = require('../services/companyDomainService');
+      
+      // Check if user is a developer (bypass domain check)
+      const isDev = isDeveloperEmail(decodedToken.email);
+      
+      let companyId;
+      let userRole = "staff"; // Default role
+      
+      if (isDev) {
+        // Developers can bypass domain check - use default companyId
+        // Developers automatically get admin role
+        companyId = 1;
+        userRole = "admin"; // ✅ Developers get admin role
+        console.log(`[Auth] ✅ Developer access granted: ${decodedToken.email} (bypassing domain check, role: admin)`);
+      } else {
+        companyId = await getCompanyIdFromEmail(decodedToken.email);
+        
+        // If companyId is null, domain is blocked
+        if (companyId === null) {
+          console.log(`[Auth] ❌ Access denied: Email domain not authorized: ${decodedToken.email}`);
+          return res.status(403).json({ 
+            message: "Access denied: Your email domain is not authorized. Please contact administrator." 
+          });
+        }
+      }
+      
       const userData = {
         uid: decodedToken.uid,
         email: decodedToken.email || "",
         displayName: decodedToken.name || "",
-        role: "staff",
+        role: userRole, // ✅ Admin for developers, staff for others
+        companyId: companyId, // ✅ Assign companyId
         lastLoginAt: new Date(decodedToken.auth_time * 1000)
       };
       
@@ -87,7 +162,7 @@ async function verifyFirebaseToken(req, res, next) {
         setImmediate(async () => {
           try {
             await User.create(userData);
-            console.log(`[Auth] ✅ User created: ${userData.email}`);
+            console.log(`[Auth] ✅ User created: ${userData.email} → companyId: ${companyId}`);
           } catch (err) {
             // User might already exist, or other error - ignore
             if (err && err.message && !err.message.includes('duplicate')) {
@@ -102,11 +177,26 @@ async function verifyFirebaseToken(req, res, next) {
     }
 
     // Set user info (use default role if user not found yet)
+    // If user is a developer but doesn't have admin role yet, upgrade them
+    const isDev = isDeveloperEmail(decodedToken.email);
+    let userRole = user?.role || (isDev ? "admin" : "staff");
+    
+    // Ensure developers always have admin role
+    if (isDev && userRole !== "admin") {
+      userRole = "admin";
+      // Update user role in background if user exists
+      if (user) {
+        User.update({ role: "admin" }, { where: { uid: decodedToken.uid } })
+          .catch(() => {}); // Ignore errors
+      }
+    }
+    
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email,
       displayName: decodedToken.name,
-      role: user?.role || "staff"
+      role: userRole, // ✅ Admin for developers
+      companyId: user?.companyId || 1 // ✅ Include companyId (default to 1 if not found)
     };
 
     console.log(`   [AUTH] ✅ User authenticated: ${req.user.email} (role: ${req.user.role})`);

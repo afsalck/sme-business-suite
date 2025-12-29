@@ -3,11 +3,19 @@ const { sequelize } = require("../server/config/database");
 const { Op } = require("sequelize");
 const dayjs = require("dayjs");
 const Invoice = require("../models/Invoice");
+const Payment = require("../models/Payment");
+const PaymentAllocation = require("../models/PaymentAllocation");
+const VatFilingItem = require("../models/VatFilingItem");
+const JournalEntry = require("../models/JournalEntry");
+const JournalEntryLine = require("../models/JournalEntryLine");
+const GeneralLedger = require("../models/GeneralLedger");
+const Company = require("../models/Company");
 const { computeInvoiceVat } = require("../server/services/vatService");
 const { generateInvoiceNumber } = require("../server/utils/invoiceNumberGenerator");
 const { generateInvoicePdf } = require("../server/services/pdfService");
 const { sendInvoiceEmail } = require("../server/services/invoiceEmailService");
 const { authorizeRole } = require("../server/middleware/authMiddleware");
+const { setTenantContext } = require("../server/middleware/tenantMiddleware");
 
 const router = express.Router();
 
@@ -32,7 +40,7 @@ function calculateDueDate(issueDate, paymentTerms) {
  * GET /api/invoices
  * List all invoices with filtering, sorting, and pagination
  */
-router.get("/", async (req, res) => {
+router.get("/", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -51,7 +59,9 @@ router.get("/", async (req, res) => {
     sortOrder = "DESC"
   } = req.query;
 
-  const where = {};
+  const where = {
+    companyId: req.companyId // ✅ Filter by companyId (multi-tenancy)
+  };
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   // Date filtering
@@ -88,17 +98,55 @@ router.get("/", async (req, res) => {
       raw: false
     });
 
+    // For debugging: Check what's actually in the database for invoice 18/19
+    if (invoices.some(inv => inv.id === 18 || inv.id === 19)) {
+      const directCheck = await sequelize.query(
+        `SELECT id, invoiceNumber, status, updatedAt FROM invoices WHERE id IN (18, 19)`,
+        { type: sequelize.QueryTypes.SELECT }
+      );
+      console.log(`[Invoice] 🔍 Direct DB query for invoices 18/19:`, directCheck);
+    }
+
     const invoiceData = invoices.map((inv) => {
       const data = inv.get({ plain: true });
-      // Check if overdue
-      if (data.status !== "paid" && data.status !== "cancelled" && data.dueDate) {
+      const originalStatus = data.status;
+      
+      // For invoice 18/19, log what Sequelize is returning
+      if (data.id === 18 || data.id === 19) {
+        console.log(`[Invoice] 🔍 Sequelize instance status for ${data.id}: "${data.status}" (from get({ plain: true }))`);
+        console.log(`[Invoice] 🔍 Sequelize model status for ${data.id}: "${inv.status}" (from model instance)`);
+      }
+      
+      // Log invoice 18 BEFORE any processing
+      if (data.id === 18 || data.invoiceNumber === "INV-2025-0002") {
+        console.log(`[Invoice] 🔍 Invoice 18 BEFORE processing: status="${originalStatus}", dueDate="${data.dueDate}"`);
+      }
+      
+      // DISABLED: Auto-overdue logic
+      // Previously, we auto-updated "draft" invoices to "overdue" if past due date
+      // This was causing issues when users manually set status to "draft"
+      // All statuses (including "draft") are now preserved as user-set
+      // 
+      // If you want to re-enable auto-overdue for draft invoices, uncomment below:
+      /*
+      if (data.status === "draft" && data.dueDate) {
         const isOverdue = dayjs().isAfter(dayjs(data.dueDate), "day");
-        if (isOverdue && data.status !== "overdue") {
-          // Auto-update status in background (don't wait)
+        if (isOverdue) {
+          console.log(`[Invoice] Auto-updating draft invoice ${data.invoiceNumber} (ID: ${data.id}) to overdue`);
           inv.update({ status: "overdue" }).catch(() => {});
           data.status = "overdue";
         }
       }
+      */
+      
+      // Log status for invoice 18/19 AFTER processing
+      if (data.id === 18 || data.id === 19 || data.invoiceNumber === "INV-2025-0002" || data.invoiceNumber === "INV-2025-0003") {
+        console.log(`[Invoice] 🔍 Invoice ${data.id} AFTER processing: status="${originalStatus}" -> "${data.status}" (changed: ${originalStatus !== data.status})`);
+        if (originalStatus !== data.status && originalStatus !== "draft") {
+          console.error(`[Invoice] ❌ ERROR: Invoice ${data.id} status was changed from "${originalStatus}" to "${data.status}" - this should NOT happen for non-draft invoices!`);
+        }
+      }
+      
       return data;
     });
 
@@ -119,7 +167,7 @@ router.get("/", async (req, res) => {
  * GET /api/invoices/:id
  * Get single invoice by ID
  */
-router.get("/:id", async (req, res) => {
+router.get("/:id", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -127,7 +175,12 @@ router.get("/:id", async (req, res) => {
   }
 
   try {
-    const invoice = await Invoice.findByPk(req.params.id);
+    const invoice = await Invoice.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
 
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
@@ -135,12 +188,20 @@ router.get("/:id", async (req, res) => {
 
     const invoiceData = invoice.get({ plain: true });
     
-    // Check if overdue
-    if (invoiceData.status !== "paid" && invoiceData.status !== "cancelled" && invoiceData.dueDate) {
+    // Check if overdue - but ONLY auto-update if status is "draft"
+    // Never override user-set statuses like "sent", "viewed", "paid", "cancelled", or already "overdue"
+    if (invoiceData.status === "draft" && invoiceData.dueDate) {
       const isOverdue = dayjs().isAfter(dayjs(invoiceData.dueDate), "day");
-      if (isOverdue && invoiceData.status !== "overdue") {
+      if (isOverdue) {
+        console.log(`[Invoice] Auto-updating draft invoice ${invoiceData.invoiceNumber} to overdue (single invoice fetch)`);
         await invoice.update({ status: "overdue" });
         invoiceData.status = "overdue";
+      }
+    } else if (invoiceData.status !== "draft" && invoiceData.status !== "paid" && invoiceData.status !== "cancelled" && invoiceData.status !== "overdue" && invoiceData.dueDate) {
+      // Log when we're preserving a user-set status (sent, viewed, etc.)
+      const isOverdue = dayjs().isAfter(dayjs(invoiceData.dueDate), "day");
+      if (isOverdue) {
+        console.log(`[Invoice] Preserving user-set status "${invoiceData.status}" for invoice ${invoiceData.invoiceNumber} (is overdue but not auto-updating - single invoice fetch)`);
       }
     }
 
@@ -155,7 +216,7 @@ router.get("/:id", async (req, res) => {
  * GET /api/invoices/:id/pdf
  * Generate and download invoice PDF
  */
-router.get("/:id/pdf", async (req, res) => {
+router.get("/:id/pdf", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -163,7 +224,12 @@ router.get("/:id/pdf", async (req, res) => {
   }
 
   try {
-    const invoice = await Invoice.findByPk(req.params.id);
+    const invoice = await Invoice.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
 
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
@@ -177,11 +243,69 @@ router.get("/:id/pdf", async (req, res) => {
         invoiceData.items = JSON.parse(invoiceData.items);
       } catch (e) {
         console.warn("[Invoice PDF] Could not parse items JSON:", e);
+        invoiceData.items = [];
       }
     }
     
-    console.log("[Invoice PDF] Generating PDF for invoice:", invoiceData.invoiceNumber);
-    const pdfArrayBuffer = await generateInvoicePdf(invoiceData);
+    // Ensure items is an array
+    if (!Array.isArray(invoiceData.items)) {
+      invoiceData.items = [];
+    }
+    
+    // Normalize numeric fields (handle DECIMAL types from database)
+    invoiceData.subtotal = parseFloat(invoiceData.subtotal || 0);
+    invoiceData.vatAmount = parseFloat(invoiceData.vatAmount || 0);
+    invoiceData.totalDiscount = parseFloat(invoiceData.totalDiscount || invoiceData.discountTotal || 0);
+    invoiceData.total = parseFloat(invoiceData.total || invoiceData.totalWithVAT || 0);
+    
+    // Normalize item numeric fields
+    invoiceData.items = invoiceData.items.map(item => ({
+      ...item,
+      quantity: parseFloat(item.quantity || 1),
+      unitPrice: parseFloat(item.unitPrice || 0),
+      discount: parseFloat(item.discount || 0),
+      vatAmount: parseFloat(item.vatAmount || 0),
+      lineTotal: parseFloat(item.lineTotal || item.total || 0)
+    }));
+    
+    // Get language from query parameter or invoice data, default to 'en'
+    const language = req.query.lang || invoiceData.language || 'en';
+    invoiceData.language = language;
+    
+    // Get company information from database
+    let companyInfo = null;
+    try {
+      const company = await Company.findOne({ where: { companyId: 1 } });
+      if (company) {
+        const companyData = company.get({ plain: true });
+        console.log("[Invoice PDF] Raw company data from database:", JSON.stringify(companyData, null, 2));
+        console.log("[Invoice PDF] companyData.name value:", companyData.name, "Type:", typeof companyData.name, "Is empty:", !companyData.name || companyData.name.trim() === "");
+        companyInfo = {
+          // For invoices, use formal company name (not shopName)
+          name: companyData.name || companyData.shopName || "BizEase UAE",
+          shopName: companyData.shopName || companyData.name || "BizEase UAE",
+          address: companyData.address || "",
+          phone: companyData.phone || "",
+          email: companyData.email || "",
+          trn: companyData.trn || ""
+        };
+        console.log("[Invoice PDF] Company info from database:", {
+          name: companyInfo.name,
+          shopName: companyInfo.shopName,
+          address: companyInfo.address,
+          phone: companyInfo.phone
+        });
+        console.log("[Invoice PDF] Final company name to pass to PDF:", companyInfo.name);
+      } else {
+        console.warn("[Invoice PDF] Company not found in database, using default");
+      }
+    } catch (companyError) {
+      console.warn("[Invoice PDF] Could not fetch company info:", companyError.message);
+      console.error("[Invoice PDF] Company fetch error stack:", companyError.stack);
+    }
+    
+    console.log("[Invoice PDF] Generating PDF for invoice:", invoiceData.invoiceNumber, "Language:", language, "CompanyInfo:", companyInfo ? "Present" : "Null");
+    const pdfArrayBuffer = await generateInvoicePdf(invoiceData, companyInfo);
     
     // Convert ArrayBuffer to Buffer
     const pdfBuffer = Buffer.from(pdfArrayBuffer);
@@ -204,7 +328,7 @@ router.get("/:id/pdf", async (req, res) => {
  * POST /api/invoices
  * Create new invoice
  */
-router.post("/", authorizeRole("admin"), async (req, res) => {
+router.post("/", authorizeRole("admin"), setTenantContext, async (req, res) => {
   console.log("[Invoice] Creating invoice for:", req.body.customerName);
 
   try {
@@ -385,6 +509,10 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
     
     const dueDateValue = dueDateFormatted ? `'${dueDateFormatted}'` : 'NULL';
     
+    // For new invoices, paidAmount = 0 and outstandingAmount = totalWithVAT
+    const paidAmount = 0;
+    const outstandingAmount = invoiceData.totalWithVAT;
+    
     const query = `
       INSERT INTO invoices (
         invoiceNumber, customerName, customerEmail, customerPhone,
@@ -392,8 +520,9 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
         issueDate, dueDate, paymentTerms, currency, language,
         items, subtotal, totalDiscount, vatAmount, total, totalWithVAT,
         taxableSubtotal, zeroRatedSubtotal, exemptSubtotal, discountTotal,
-        notes, status, vatType,
+        notes, status, vatType, paidAmount, outstandingAmount,
         createdByUid, createdByDisplayName, createdByEmail,
+        companyId,
         createdAt, updatedAt
       )
       OUTPUT INSERTED.id, INSERTED.invoiceNumber, INSERTED.customerName,
@@ -404,8 +533,9 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
              INSERTED.totalDiscount, INSERTED.vatAmount, INSERTED.total,
              INSERTED.totalWithVAT, INSERTED.taxableSubtotal, INSERTED.zeroRatedSubtotal,
              INSERTED.exemptSubtotal, INSERTED.discountTotal,
-             INSERTED.notes, INSERTED.status, INSERTED.vatType, INSERTED.createdByUid,
-             INSERTED.createdByDisplayName, INSERTED.createdByEmail,
+             INSERTED.notes, INSERTED.status, INSERTED.vatType,
+             INSERTED.paidAmount, INSERTED.outstandingAmount,
+             INSERTED.createdByUid, INSERTED.createdByDisplayName, INSERTED.createdByEmail,
              INSERTED.createdAt, INSERTED.updatedAt
       VALUES (
         N'${escapeSql(invoiceData.invoiceNumber)}',
@@ -432,9 +562,12 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
         ${invoiceData.notes ? `N'${escapeSql(invoiceData.notes)}'` : 'NULL'},
         '${escapeSql(invoiceData.status)}',
         '${escapeSql(invoiceData.vatType)}',
+        ${paidAmount},
+        ${outstandingAmount},
         N'${escapeSql(invoiceData.createdByUid)}',
         ${invoiceData.createdByDisplayName ? `N'${escapeSql(invoiceData.createdByDisplayName)}'` : 'NULL'},
         ${invoiceData.createdByEmail ? `N'${escapeSql(invoiceData.createdByEmail)}'` : 'NULL'},
+        ${req.companyId || 1},
         '${now}',
         '${now}'
       )
@@ -485,6 +618,36 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
     }
 
     console.log("[Invoice] ✓ Invoice created:", invoiceNumber);
+    console.log("[Invoice] Invoice status:", savedInvoice.status);
+
+    // Auto-create journal entry for invoice (only if not draft)
+    if (savedInvoice.status !== "draft") {
+      try {
+        const { createJournalEntryFromInvoice, postJournalEntry } = require("../server/services/accountingService");
+        const companyId = 1; // TODO: Get from user context
+        
+        console.log("[Invoice] Creating journal entry for invoice:", invoiceNumber);
+        console.log("[Invoice] Invoice total:", savedInvoice.totalWithVAT || savedInvoice.total);
+        console.log("[Invoice] Invoice VAT:", savedInvoice.vatAmount);
+        
+        const journalEntry = await createJournalEntryFromInvoice(savedInvoice, companyId);
+        
+        if (journalEntry) {
+          console.log("[Invoice] ✓ Journal entry created:", journalEntry.entryNumber || journalEntry.id);
+          // Auto-post the journal entry
+          await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+          console.log("[Invoice] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+        } else {
+          console.warn("[Invoice] ⚠️  Journal entry was not created (returned null)");
+        }
+      } catch (accountingError) {
+        console.error("[Invoice] ❌ Accounting integration failed (non-critical):", accountingError.message);
+        console.error("[Invoice] Accounting error stack:", accountingError.stack);
+        // Don't fail the invoice creation if accounting fails
+      }
+    } else {
+      console.log("[Invoice] ⚠️  Invoice status is 'draft' - journal entry will be created when status changes to 'sent' or 'paid'");
+    }
 
     // Send email if status is "sent" and email is provided
     if (savedInvoice.status === "sent" && savedInvoice.customerEmail) {
@@ -519,7 +682,7 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
  * PUT /api/invoices/:id
  * Update invoice
  */
-router.put("/:id", authorizeRole("admin"), async (req, res) => {
+router.put("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -527,7 +690,12 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
   }
 
   try {
-    const invoice = await Invoice.findByPk(req.params.id);
+    const invoice = await Invoice.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
 
     if (!invoice) {
       return res.status(404).json({ message: "Invoice not found" });
@@ -744,7 +912,7 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
                INSERTED.dueDate, INSERTED.paymentTerms, INSERTED.currency,
                INSERTED.language, INSERTED.items, INSERTED.subtotal,
                INSERTED.totalDiscount, INSERTED.vatAmount, INSERTED.total,
-               INSERTED.notes, INSERTED.status, INSERTED.createdByUid,
+               INSERTED.totalWithVAT, INSERTED.notes, INSERTED.status, INSERTED.createdByUid,
                INSERTED.createdByDisplayName, INSERTED.createdByEmail,
                INSERTED.createdAt, INSERTED.updatedAt
         WHERE id = ${req.params.id}
@@ -778,6 +946,45 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
         }
       }
       
+      // Auto-create journal entry if status is now "sent" or "paid" (regardless of old status)
+      // This ensures journal entries are created even if invoice was created directly as "sent" or "paid"
+      if (updatedInvoice.status === "sent" || updatedInvoice.status === "paid") {
+        try {
+          const { createJournalEntryFromInvoice, postJournalEntry } = require("../server/services/accountingService");
+          const companyId = 1; // TODO: Get from user context
+          
+          console.log("[Invoice] ========================================");
+          console.log("[Invoice] Status is now '" + updatedInvoice.status + "' (was '" + oldStatus + "') - ensuring journal entry exists");
+          console.log("[Invoice] Invoice ID:", updatedInvoice.id, "(type:", typeof updatedInvoice.id + ")");
+          console.log("[Invoice] Invoice number:", updatedInvoice.invoiceNumber);
+          console.log("[Invoice] Invoice totalWithVAT:", updatedInvoice.totalWithVAT);
+          console.log("[Invoice] Invoice total:", updatedInvoice.total);
+          console.log("[Invoice] Invoice VAT:", updatedInvoice.vatAmount);
+          
+          const journalEntry = await createJournalEntryFromInvoice(updatedInvoice, companyId);
+          
+          if (journalEntry) {
+            console.log("[Invoice] ✓ Journal entry created/retrieved:", journalEntry.entryNumber || journalEntry.id);
+            console.log("[Invoice] Journal entry status:", journalEntry.status);
+            
+            // Auto-post the journal entry if it's not already posted
+            if (journalEntry.status !== 'posted') {
+              await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+              console.log("[Invoice] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+            } else {
+              console.log("[Invoice] ✓ Journal entry already posted");
+            }
+          } else {
+            console.warn("[Invoice] ⚠️  Journal entry was not created (returned null)");
+          }
+          console.log("[Invoice] ========================================");
+        } catch (accountingError) {
+          console.error("[Invoice] ❌ Accounting integration failed (non-critical):", accountingError.message);
+          console.error("[Invoice] Accounting error stack:", accountingError.stack);
+          // Don't fail the invoice update if accounting fails
+        }
+      }
+
       // Send email if status changed to "sent"
       if (oldStatus !== "sent" && updatedInvoice.status === "sent" && updatedInvoice.customerEmail) {
         try {
@@ -833,66 +1040,207 @@ router.patch("/:id/status", authorizeRole("admin"), async (req, res) => {
     }
 
     const oldStatus = invoice.status;
+    console.log("[Invoice] Current invoice status (oldStatus):", oldStatus);
+    console.log("[Invoice] New status requested:", status);
+    console.log("[Invoice] Invoice ID:", req.params.id, "Type:", typeof req.params.id);
     
-    // Use raw SQL to update status with properly formatted date for SQL Server
-    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    const escapeSql = (str) => (str || '').replace(/'/g, "''");
+    // Use explicit transaction to ensure the update is committed
+    const transaction = await sequelize.transaction();
+    let updatedInvoice = null; // Declare outside try block for use in non-critical operations
     
-    const updateQuery = `
-      UPDATE invoices
-      SET status = '${escapeSql(status)}',
-          updatedAt = '${now}'
-      OUTPUT INSERTED.id, INSERTED.invoiceNumber, INSERTED.customerName,
-             INSERTED.customerEmail, INSERTED.customerPhone, INSERTED.issueDate,
-             INSERTED.dueDate, INSERTED.paymentTerms, INSERTED.currency,
-             INSERTED.language, INSERTED.items, INSERTED.subtotal,
-             INSERTED.totalDiscount, INSERTED.vatAmount, INSERTED.total,
-             INSERTED.notes, INSERTED.status, INSERTED.createdByUid,
-             INSERTED.createdByDisplayName, INSERTED.createdByEmail,
-             INSERTED.createdAt, INSERTED.updatedAt
-      WHERE id = ${req.params.id}
-    `;
-    
-    const [updateResults] = await sequelize.query(updateQuery, {
-      type: sequelize.QueryTypes.SELECT
-    });
-    
-    let updatedInvoice = Array.isArray(updateResults) && updateResults.length > 0 
-      ? updateResults[0] 
-      : (updateResults || null);
-    
-    if (!updatedInvoice) {
-      // Fallback: fetch the updated invoice
-      const fetchedInvoice = await Invoice.findByPk(req.params.id);
-      if (fetchedInvoice) {
-        updatedInvoice = fetchedInvoice.get({ plain: true });
+    try {
+      // Update the invoice status using raw SQL to avoid date format issues
+      // Use :parameter syntax for Sequelize replacements (Sequelize converts :param to @param for SQL Server)
+      const invoiceId = parseInt(req.params.id);
+      console.log("[Invoice] Using RAW SQL to update invoice:", invoiceId, "to status:", status);
+      
+      const updateQuery = `
+        UPDATE invoices 
+        SET status = :status, updatedAt = GETDATE()
+        WHERE id = :id
+      `;
+      
+      console.log("[Invoice] Executing raw SQL update query");
+      const result = await sequelize.query(updateQuery, {
+        replacements: { status: status, id: invoiceId },
+        type: sequelize.QueryTypes.UPDATE,
+        transaction
+      });
+      
+      console.log("[Invoice] Raw SQL update completed, result:", result);
+      console.log("[Invoice] Status updated to:", status);
+      
+      // Commit the transaction to ensure persistence
+      await transaction.commit();
+      console.log("[Invoice] Transaction committed successfully");
+      
+      // Fetch fresh invoice data using raw SQL to avoid Sequelize date issues
+      const [freshInvoiceData] = await sequelize.query(
+        `SELECT * FROM invoices WHERE id = :id`,
+        {
+          replacements: { id: parseInt(req.params.id) },
+          type: sequelize.QueryTypes.SELECT
+        }
+      );
+      
+      if (freshInvoiceData) {
+        // Manually set the invoice data to avoid reload issues
+        invoice.set(freshInvoiceData);
+        console.log("[Invoice] Fresh invoice data loaded, status:", invoice.status);
       } else {
-        return res.status(404).json({ message: "Invoice not found after update" });
+        // Fallback to reload if raw query fails
+        await invoice.reload();
+        console.log("[Invoice] Invoice reloaded after commit, status:", invoice.status);
       }
+      
+      // Verify the status was actually updated using raw SQL
+      const [rawResult] = await sequelize.query(
+        `SELECT id, invoiceNumber, status, updatedAt FROM invoices WHERE id = :id`,
+        { 
+          replacements: { id: parseInt(req.params.id) },
+          type: sequelize.QueryTypes.SELECT 
+        }
+      );
+      console.log("[Invoice] Raw SQL query result:", rawResult);
+      console.log("[Invoice] Raw SQL status:", rawResult?.status);
+      console.log("[Invoice] Expected status:", status);
+      
+      if (rawResult && rawResult.status !== status) {
+        console.error("[Invoice] ❌ CRITICAL: Database has wrong status! Expected:", status, "Got:", rawResult.status);
+      }
+      
+      // Verify the status was actually updated
+      const currentStatus = invoice.status;
+      console.log("[Invoice] Status after reload:", currentStatus);
+      console.log("[Invoice] Expected status:", status);
+      console.log("[Invoice] Status match:", currentStatus === status);
+      
+      if (currentStatus !== status) {
+        console.error("[Invoice] WARNING: Status mismatch! Expected:", status, "Got:", currentStatus);
+        // Try to fetch directly from database with fresh query
+        const directFetch = await Invoice.findByPk(req.params.id, {
+          raw: false
+        });
+        console.log("[Invoice] Direct fetch status:", directFetch?.status);
+        if (directFetch && directFetch.status === status) {
+          // Use the directly fetched invoice
+          invoice = directFetch;
+          console.log("[Invoice] Using direct fetch - status confirmed:", invoice.status);
+        } else {
+          console.error("[Invoice] CRITICAL: Status still doesn't match after direct fetch!");
+          console.error("[Invoice] Direct fetch returned:", directFetch?.status, "Expected:", status);
+        }
+      } else {
+        console.log("[Invoice] ✓ Status update verified successfully");
+      }
+      
+      updatedInvoice = invoice.get({ plain: true });
+      
+      console.log("[Invoice] Invoice status updated successfully:", updatedInvoice.invoiceNumber, "->", updatedInvoice.status);
+      console.log("[Invoice] Updated invoice ID:", updatedInvoice.id, "Status:", updatedInvoice.status);
+      console.log("[Invoice] Updated invoice object:", JSON.stringify({ id: updatedInvoice.id, status: updatedInvoice.status }));
+      
+      // Parse items JSON if needed
+      if (updatedInvoice.items && typeof updatedInvoice.items === 'string') {
+        try {
+          updatedInvoice.items = JSON.parse(updatedInvoice.items);
+        } catch (e) {
+          console.warn("[Invoice] Could not parse items JSON:", e);
+        }
+      }
+
+      // Transaction is committed, now do non-critical operations (journal entry, email)
+      // These are outside the transaction so they don't cause rollback issues
+      
+    } catch (updateError) {
+      // Rollback transaction on error (only if not yet committed)
+      if (transaction && !transaction.finished) {
+        try {
+          await transaction.rollback();
+          console.log("[Invoice] Transaction rolled back due to error");
+        } catch (rollbackError) {
+          console.error("[Invoice] Rollback error:", rollbackError.message);
+          // Ignore rollback errors if transaction is already finished
+        }
+      }
+      console.error("[Invoice] Status update error:", updateError);
+      console.error("[Invoice] Error name:", updateError.name);
+      console.error("[Invoice] Error message:", updateError.message);
+      if (updateError.parent) {
+        console.error("[Invoice] SQL Error code:", updateError.parent.code);
+        console.error("[Invoice] SQL Error number:", updateError.parent.number);
+        console.error("[Invoice] SQL:", updateError.parent.sql);
+      }
+      console.error("[Invoice] Error stack:", updateError.stack);
+      throw updateError; // Re-throw to be caught by outer catch
     }
     
-    // Parse items JSON if needed
-    if (updatedInvoice.items && typeof updatedInvoice.items === 'string') {
+    // Non-critical operations after transaction is committed
+    // Only proceed if the transaction was successful (updatedInvoice exists)
+    if (updatedInvoice) {
       try {
-        updatedInvoice.items = JSON.parse(updatedInvoice.items);
-      } catch (e) {
-        console.warn("[Invoice] Could not parse items JSON:", e);
+        // Auto-create journal entry if status is now "sent" or "paid" (regardless of old status)
+      // This ensures journal entries are created even if invoice was created directly as "sent" or "paid"
+      if (status === "sent" || status === "paid") {
+        try {
+          const { createJournalEntryFromInvoice, postJournalEntry } = require("../server/services/accountingService");
+          const companyId = 1; // TODO: Get from user context
+          
+          console.log("[Invoice] ========================================");
+          console.log("[Invoice] Status is now '" + status + "' (was '" + oldStatus + "') - ensuring journal entry exists");
+          console.log("[Invoice] Invoice ID:", updatedInvoice.id, "(type:", typeof updatedInvoice.id + ")");
+          console.log("[Invoice] Invoice number:", updatedInvoice.invoiceNumber);
+          console.log("[Invoice] Invoice totalWithVAT:", updatedInvoice.totalWithVAT);
+          console.log("[Invoice] Invoice total:", updatedInvoice.total);
+          console.log("[Invoice] Invoice VAT:", updatedInvoice.vatAmount);
+          
+          const journalEntry = await createJournalEntryFromInvoice(updatedInvoice, companyId);
+          
+          if (journalEntry) {
+            console.log("[Invoice] ✓ Journal entry created/retrieved:", journalEntry.entryNumber || journalEntry.id);
+            console.log("[Invoice] Journal entry status:", journalEntry.status);
+            
+            // Auto-post the journal entry if it's not already posted
+            if (journalEntry.status !== 'posted') {
+              await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+              console.log("[Invoice] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+            } else {
+              console.log("[Invoice] ✓ Journal entry already posted");
+            }
+          } else {
+            console.warn("[Invoice] ⚠️  Journal entry was not created (returned null)");
+          }
+          console.log("[Invoice] ========================================");
+        } catch (accountingError) {
+          console.error("[Invoice] ❌ Accounting integration failed (non-critical):", accountingError.message);
+          console.error("[Invoice] Accounting error stack:", accountingError.stack);
+          // Don't fail the status update if accounting fails
+        }
       }
-    }
 
-    // Send email if status changed to "sent"
-    if (oldStatus !== "sent" && status === "sent" && updatedInvoice.customerEmail) {
-      try {
-        await sendInvoiceEmail(updatedInvoice);
-        console.log("[Invoice] ✓ Email sent for status change:", updatedInvoice.invoiceNumber);
-      } catch (emailError) {
-        console.error("[Invoice] Email sending failed:", emailError);
+      // Send email if status changed to "sent"
+      if (oldStatus !== "sent" && status === "sent" && updatedInvoice.customerEmail) {
+        try {
+          await sendInvoiceEmail(updatedInvoice);
+          console.log("[Invoice] ✓ Email sent for status change:", updatedInvoice.invoiceNumber);
+        } catch (emailError) {
+          console.error("[Invoice] Email sending failed:", emailError);
+        }
       }
-    }
 
-    res.json(updatedInvoice);
+        res.json(updatedInvoice);
+      } catch (nonCriticalError) {
+        // Even if journal entry or email fails, return the updated invoice
+        console.error("[Invoice] Non-critical operation failed:", nonCriticalError.message);
+        res.json(updatedInvoice);
+      }
+    } else {
+      // Transaction failed, error already handled in catch block above
+      // Response already sent in outer catch block
+    }
   } catch (error) {
     console.error("[Invoice] Status update error:", error);
+    console.error("[Invoice] Error stack:", error.stack);
     res.status(500).json({ message: "Failed to update status", error: error.message });
   }
 });
@@ -901,26 +1249,119 @@ router.patch("/:id/status", authorizeRole("admin"), async (req, res) => {
  * DELETE /api/invoices/:id
  * Delete invoice
  */
-router.delete("/:id", authorizeRole("admin"), async (req, res) => {
+router.delete("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
     return res.status(503).json({ message: "Database connection unavailable" });
   }
 
+  // Use transaction to ensure all related records are deleted
+  const transaction = await sequelize.transaction();
+
   try {
-    const invoice = await Invoice.findByPk(req.params.id);
+    const invoiceId = parseInt(req.params.id);
+    const invoice = await Invoice.findOne({
+      where: {
+        id: invoiceId,
+        companyId: req.companyId // ✅ Filter by companyId
+      },
+      transaction
+    });
 
     if (!invoice) {
+      await transaction.rollback();
       return res.status(404).json({ message: "Invoice not found" });
     }
 
-    await invoice.destroy();
-    res.json({ message: "Invoice deleted successfully" });
+    console.log(`[Invoice] Deleting invoice ${invoiceId} (${invoice.invoiceNumber}) and all related records...`);
+
+    // Delete all related records first (cascade delete)
+    // 1. Delete payment allocations
+    await PaymentAllocation.destroy({
+      where: { invoiceId },
+      transaction
+    });
+    console.log(`[Invoice] Deleted payment allocations for invoice ${invoiceId}`);
+
+    // 2. Delete payments
+    await Payment.destroy({
+      where: { invoiceId },
+      transaction
+    });
+    console.log(`[Invoice] Deleted payments for invoice ${invoiceId}`);
+
+    // 3. Delete VAT filing items
+    await VatFilingItem.destroy({
+      where: { invoiceId },
+      transaction
+    });
+    console.log(`[Invoice] Deleted VAT filing items for invoice ${invoiceId}`);
+
+    // 4. Delete journal entries related to this invoice
+    // First, find all journal entries for this invoice
+    const journalEntries = await JournalEntry.findAll({
+      where: { 
+        referenceType: 'invoice',
+        referenceId: invoiceId
+      },
+      transaction
+    });
+
+    if (journalEntries.length > 0) {
+      const journalEntryIds = journalEntries.map(je => je.id);
+      
+      // Delete General Ledger entries for these journal entries
+      await GeneralLedger.destroy({
+        where: {
+          journalEntryId: { [Op.in]: journalEntryIds }
+        },
+        transaction
+      });
+      console.log(`[Invoice] Deleted general ledger entries for ${journalEntryIds.length} journal entries`);
+
+      // Delete Journal Entry Lines
+      await JournalEntryLine.destroy({
+        where: {
+          journalEntryId: { [Op.in]: journalEntryIds }
+        },
+        transaction
+      });
+      console.log(`[Invoice] Deleted journal entry lines for ${journalEntryIds.length} journal entries`);
+
+      // Finally, delete the journal entries
+      await JournalEntry.destroy({
+        where: { 
+          referenceType: 'invoice',
+          referenceId: invoiceId
+        },
+        transaction
+      });
+      console.log(`[Invoice] Deleted ${journalEntries.length} journal entries for invoice ${invoiceId}`);
+    }
+
+    // 5. Finally, delete the invoice
+    await invoice.destroy({ transaction });
+    console.log(`[Invoice] Deleted invoice ${invoiceId}`);
+
+    // Commit transaction
+    await transaction.commit();
+    res.json({ message: "Invoice and all related records deleted successfully" });
   } catch (error) {
+    await transaction.rollback();
     console.error("[Invoice] Delete error:", error);
-    res.status(500).json({ message: "Failed to delete invoice", error: error.message });
+    
+    // Provide user-friendly error message
+    let errorMessage = "Failed to delete invoice";
+    if (error.name === 'SequelizeForeignKeyConstraintError') {
+      errorMessage = "Cannot delete invoice. There are related records (payments, journal entries, etc.) that prevent deletion. Please contact support.";
+    } else {
+      errorMessage = error.message || errorMessage;
+    }
+    
+    res.status(500).json({ message: errorMessage, error: error.message });
   }
 });
 
 module.exports = router;
+

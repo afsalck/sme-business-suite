@@ -44,17 +44,44 @@ async function createNotificationIfNotExists({
       return null; // Notification already exists
     }
 
-    // Create new notification
-    const notification = await Notification.create({
-      userId,
-      type,
-      title,
-      message,
-      dueDate: dueDate ? new Date(dueDate) : null,
-      link,
-      notificationKey,
-      status: 'unread'
+    // Format dueDate properly for SQL Server (YYYY-MM-DD HH:mm:ss)
+    let formattedDueDate = null;
+    if (dueDate) {
+      // Use dayjs to format the date consistently
+      formattedDueDate = dayjs(dueDate).format('YYYY-MM-DD HH:mm:ss');
+    }
+
+    // Create new notification using raw SQL to avoid date conversion issues
+    await sequelize.query(`
+      INSERT INTO notifications (userId, type, title, message, dueDate, link, notificationKey, status, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'unread', GETDATE(), GETDATE())
+    `, {
+      replacements: [
+        userId,
+        type,
+        title,
+        message,
+        formattedDueDate,
+        link || null,
+        notificationKey
+      ],
+      type: sequelize.QueryTypes.INSERT
     });
+
+    // Fetch the created notification using raw SQL to avoid date issues
+    const [notifications] = await sequelize.query(`
+      SELECT * FROM notifications WHERE notificationKey = ?
+    `, {
+      replacements: [notificationKey],
+      type: sequelize.QueryTypes.SELECT
+    });
+
+    if (!notifications || notifications.length === 0) {
+      throw new Error('Failed to create notification');
+    }
+
+    // Map to Notification model instance
+    const notification = Notification.build(notifications[0], { isNewRecord: false });
 
     return notification;
   } catch (error) {
@@ -116,42 +143,67 @@ async function checkPassportExpiries() {
   const Employee = require('../../models/Employee');
   
   try {
-    // Use current date - check if expiry is exactly 60 days away
-    const today = dayjs();
-    const thresholdDate = today.add(60, 'day').endOf('day').toDate();
-    const startDate = today.startOf('day').toDate();
+    // Use current date - check if expiry is within 60 days (including today)
+    const today = dayjs().startOf('day');
+    const thresholdDate = today.add(60, 'day').endOf('day');
+    const startDate = today.startOf('day'); // Include today
 
-    const employees = await Employee.findAll({
-      where: {
-        passportExpiry: {
-          [sequelize.Sequelize.Op.between]: [startDate, thresholdDate]
-        }
-      }
+    console.log('[Notification Service] Checking passport expiries:', {
+      startDate: startDate.format('YYYY-MM-DD HH:mm:ss'),
+      thresholdDate: thresholdDate.format('YYYY-MM-DD HH:mm:ss')
     });
+
+    // Use raw SQL to avoid SQL Server date conversion issues
+    // Include dates from today up to 60 days from now
+    const sql = `
+      SELECT * FROM employees
+      WHERE passportExpiry IS NOT NULL
+        AND CAST(passportExpiry AS DATE) >= CAST(? AS DATE)
+        AND CAST(passportExpiry AS DATE) <= CAST(? AS DATE)
+    `;
+    
+    const employees = await sequelize.query(sql, {
+      type: sequelize.QueryTypes.SELECT,
+      replacements: [
+        startDate.format('YYYY-MM-DD'),
+        thresholdDate.format('YYYY-MM-DD')
+      ],
+      model: Employee,
+      mapToModel: true
+    });
+
+    console.log(`[Notification Service] Found ${employees.length} employees with passport expiries in range`);
 
     const notifications = [];
     for (const employee of employees) {
       if (!employee.passportExpiry) continue;
 
-      const expiryDate = dayjs(employee.passportExpiry);
+      const expiryDate = dayjs(employee.passportExpiry).startOf('day');
       const daysUntilExpiry = expiryDate.diff(today, 'day');
 
-      // Notify if between 60-59 days before (to catch it on the day it hits 60 days)
-      if (daysUntilExpiry >= 59 && daysUntilExpiry <= 60) {
+      console.log(`[Notification Service] Employee ${employee.fullName}: passport expires in ${daysUntilExpiry} days`);
+
+      // Notify if expiry is within 60 days (0-60 days, including today)
+      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 60) {
+        console.log(`[Notification Service] Creating passport expiry notification for ${employee.fullName}`);
         const notification = await createNotificationForAllAdmins({
           type: 'passport_expiry',
           title: 'Passport Expiring Soon',
           message: `Passport for ${employee.fullName} will expire on ${expiryDate.format('DD MMM YYYY')}.`,
-          dueDate: employee.passportExpiry,
+          dueDate: expiryDate.toDate(), // Use dayjs date object
           link: `/hr/employees/${employee.id}`,
-          entityId: `employee_${employee.id}`
+          entityId: `employee_passport_${employee.id}`
         });
         if (notification && notification.length > 0) {
           notifications.push(...notification);
+          console.log(`[Notification Service] Created ${notification.length} passport notification(s) for ${employee.fullName}`);
+        } else {
+          console.log(`[Notification Service] No notification created for ${employee.fullName} (may already exist)`);
         }
       }
     }
 
+    console.log(`[Notification Service] Total passport notifications created: ${notifications.length}`);
     return notifications;
   } catch (error) {
     console.error('[Notification Service] Error checking passport expiries:', error);
@@ -166,42 +218,67 @@ async function checkVisaExpiries() {
   const Employee = require('../../models/Employee');
   
   try {
-    // Use UAE time (UTC+4) - adjust by 4 hours
-    const today = dayjs().utcOffset(4 * 60);
-    const thresholdDate = today.add(60, 'day').endOf('day').toDate();
-    const startDate = today.startOf('day').toDate();
+    // Use current date - check if expiry is within 60 days (including today)
+    const today = dayjs().startOf('day');
+    const thresholdDate = today.add(60, 'day').endOf('day');
+    const startDate = today.startOf('day'); // Include today
 
-    const employees = await Employee.findAll({
-      where: {
-        visaExpiry: {
-          [sequelize.Sequelize.Op.between]: [startDate, thresholdDate]
-        }
-      }
+    console.log('[Notification Service] Checking visa expiries:', {
+      startDate: startDate.format('YYYY-MM-DD HH:mm:ss'),
+      thresholdDate: thresholdDate.format('YYYY-MM-DD HH:mm:ss')
     });
+
+    // Use raw SQL to avoid SQL Server date conversion issues
+    // Include dates from today up to 60 days from now
+    const sql = `
+      SELECT * FROM employees
+      WHERE visaExpiry IS NOT NULL
+        AND CAST(visaExpiry AS DATE) >= CAST(? AS DATE)
+        AND CAST(visaExpiry AS DATE) <= CAST(? AS DATE)
+    `;
+    
+    const employees = await sequelize.query(sql, {
+      type: sequelize.QueryTypes.SELECT,
+      replacements: [
+        startDate.format('YYYY-MM-DD'),
+        thresholdDate.format('YYYY-MM-DD')
+      ],
+      model: Employee,
+      mapToModel: true
+    });
+
+    console.log(`[Notification Service] Found ${employees.length} employees with visa expiries in range`);
 
     const notifications = [];
     for (const employee of employees) {
       if (!employee.visaExpiry) continue;
 
-      const expiryDate = dayjs(employee.visaExpiry);
+      const expiryDate = dayjs(employee.visaExpiry).startOf('day');
       const daysUntilExpiry = expiryDate.diff(today, 'day');
 
-      // Notify if between 60-59 days before
-      if (daysUntilExpiry >= 59 && daysUntilExpiry <= 60) {
+      console.log(`[Notification Service] Employee ${employee.fullName}: visa expires in ${daysUntilExpiry} days`);
+
+      // Notify if expiry is within 60 days (0-60 days, including today)
+      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 60) {
+        console.log(`[Notification Service] Creating visa expiry notification for ${employee.fullName}`);
         const notification = await createNotificationForAllAdmins({
           type: 'visa_expiry',
           title: 'Visa Expiring Soon',
           message: `Visa for ${employee.fullName} expires on ${expiryDate.format('DD MMM YYYY')}.`,
-          dueDate: employee.visaExpiry,
+          dueDate: expiryDate.toDate(), // Use dayjs date object
           link: `/hr/employees/${employee.id}`,
-          entityId: `employee_${employee.id}`
+          entityId: `employee_visa_${employee.id}`
         });
         if (notification && notification.length > 0) {
           notifications.push(...notification);
+          console.log(`[Notification Service] Created ${notification.length} visa notification(s) for ${employee.fullName}`);
+        } else {
+          console.log(`[Notification Service] No notification created for ${employee.fullName} (may already exist)`);
         }
       }
     }
 
+    console.log(`[Notification Service] Total visa notifications created: ${notifications.length}`);
     return notifications;
   } catch (error) {
     console.error('[Notification Service] Error checking visa expiries:', error);
@@ -217,18 +294,28 @@ async function checkContractExpiries() {
   const Employee = require('../../models/Employee');
   
   try {
-    // Use UAE time (UTC+4) - adjust by 4 hours
-    const today = dayjs().utcOffset(4 * 60);
-    const thresholdDate = today.add(30, 'day').endOf('day').toDate();
-    const startDate = today.startOf('day').toDate();
+    // Use current date - check if expiry is within 30 days
+    const today = dayjs();
+    const thresholdDate = today.add(30, 'day').endOf('day');
+    const startDate = today.startOf('day');
 
-    const contracts = await Contract.findAll({
-      where: {
-        endDate: {
-          [sequelize.Sequelize.Op.between]: [startDate, thresholdDate]
-        },
-        status: 'active'
-      }
+    // Use raw SQL to avoid SQL Server date conversion issues
+    const sql = `
+      SELECT * FROM contracts
+      WHERE endDate IS NOT NULL
+        AND endDate >= ?
+        AND endDate <= ?
+        AND status = 'active'
+    `;
+    
+    const contracts = await sequelize.query(sql, {
+      type: sequelize.QueryTypes.SELECT,
+      replacements: [
+        startDate.format('YYYY-MM-DD HH:mm:ss'),
+        thresholdDate.format('YYYY-MM-DD HH:mm:ss')
+      ],
+      model: Contract,
+      mapToModel: true
     });
 
     const notifications = [];
@@ -255,7 +342,7 @@ async function checkContractExpiries() {
           type: 'contract_expiry',
           title: 'Contract Ending Soon',
           message: `Contract for ${employeeName} ends on ${expiryDate.format('DD MMM YYYY')}.`,
-          dueDate: contract.endDate,
+          dueDate: expiryDate.toDate(), // Use dayjs date object
           link: `/hr/contracts/${contract.id}`,
           entityId: `contract_${contract.id}`
         });
@@ -361,20 +448,28 @@ async function checkInvoiceDue() {
   const Invoice = require('../../models/Invoice');
   
   try {
-    // Use UAE time (UTC+4) - adjust by 4 hours
-    const today = dayjs().utcOffset(4 * 60);
-    const thresholdDate = today.add(7, 'day').endOf('day').toDate();
-    const startDate = today.startOf('day').toDate();
+    // Use current date - check if due date is within 7 days
+    const today = dayjs();
+    const thresholdDate = today.add(7, 'day').endOf('day');
+    const startDate = today.startOf('day');
 
-    const invoices = await Invoice.findAll({
-      where: {
-        dueDate: {
-          [sequelize.Sequelize.Op.between]: [startDate, thresholdDate]
-        },
-        status: {
-          [sequelize.Sequelize.Op.notIn]: ['paid', 'cancelled']
-        }
-      }
+    // Use raw SQL to avoid SQL Server date conversion issues
+    const sql = `
+      SELECT * FROM invoices
+      WHERE dueDate IS NOT NULL
+        AND dueDate >= ?
+        AND dueDate <= ?
+        AND status NOT IN ('paid', 'cancelled')
+    `;
+    
+    const invoices = await sequelize.query(sql, {
+      type: sequelize.QueryTypes.SELECT,
+      replacements: [
+        startDate.format('YYYY-MM-DD HH:mm:ss'),
+        thresholdDate.format('YYYY-MM-DD HH:mm:ss')
+      ],
+      model: Invoice,
+      mapToModel: true
     });
 
     const notifications = [];
@@ -390,7 +485,7 @@ async function checkInvoiceDue() {
           type: 'invoice_due',
           title: `Invoice ${invoice.invoiceNumber} is due soon`,
           message: `Invoice ${invoice.invoiceNumber} is due on ${dueDate.format('DD MMM YYYY')}.`,
-          dueDate: invoice.dueDate,
+          dueDate: dueDate.toDate(), // Use dayjs date object
           link: `/invoices/${invoice.id}`,
           entityId: `invoice_${invoice.id}`
         });
@@ -440,6 +535,94 @@ async function runAllExpiryChecks() {
   }
 }
 
+/**
+ * Check a single employee for expiries and create notifications immediately
+ * Called when employee is created or updated
+ */
+async function checkEmployeeExpiriesImmediate(employee) {
+  const dayjs = require('dayjs');
+  const today = dayjs().startOf('day');
+  const notifications = [];
+
+  try {
+    console.log('[Notification Service] Immediate check started for employee:', employee.fullName || employee.id);
+    console.log('[Notification Service] Employee data:', {
+      id: employee.id,
+      fullName: employee.fullName,
+      passportExpiry: employee.passportExpiry,
+      visaExpiry: employee.visaExpiry
+    });
+
+    // Check passport expiry
+    if (employee.passportExpiry) {
+      const expiryDate = dayjs(employee.passportExpiry).startOf('day');
+      const daysUntilExpiry = expiryDate.diff(today, 'day');
+
+      console.log(`[Notification Service] Passport expiry check: ${expiryDate.format('YYYY-MM-DD')}, days until expiry: ${daysUntilExpiry}`);
+
+      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 60) {
+        console.log(`[Notification Service] ✓ Creating passport notification for ${employee.fullName} (expires in ${daysUntilExpiry} days)`);
+        const notification = await createNotificationForAllAdmins({
+          type: 'passport_expiry',
+          title: 'Passport Expiring Soon',
+          message: `Passport for ${employee.fullName} will expire on ${expiryDate.format('DD MMM YYYY')}.`,
+          dueDate: expiryDate.toDate(),
+          link: `/hr/employees/${employee.id}`,
+          entityId: `employee_passport_${employee.id}`
+        });
+        if (notification && notification.length > 0) {
+          notifications.push(...notification);
+          console.log(`[Notification Service] ✓ Created ${notification.length} passport notification(s)`);
+        } else {
+          console.log(`[Notification Service] ⚠️  No passport notification created (may already exist)`);
+        }
+      } else {
+        console.log(`[Notification Service] ⏭️  Passport expiry ${daysUntilExpiry} days away (outside 0-60 day range)`);
+      }
+    } else {
+      console.log('[Notification Service] ⏭️  No passport expiry date');
+    }
+
+    // Check visa expiry
+    if (employee.visaExpiry) {
+      const expiryDate = dayjs(employee.visaExpiry).startOf('day');
+      const daysUntilExpiry = expiryDate.diff(today, 'day');
+
+      console.log(`[Notification Service] Visa expiry check: ${expiryDate.format('YYYY-MM-DD')}, days until expiry: ${daysUntilExpiry}`);
+
+      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 60) {
+        console.log(`[Notification Service] ✓ Creating visa notification for ${employee.fullName} (expires in ${daysUntilExpiry} days)`);
+        const notification = await createNotificationForAllAdmins({
+          type: 'visa_expiry',
+          title: 'Visa Expiring Soon',
+          message: `Visa for ${employee.fullName} expires on ${expiryDate.format('DD MMM YYYY')}.`,
+          dueDate: expiryDate.toDate(),
+          link: `/hr/employees/${employee.id}`,
+          entityId: `employee_visa_${employee.id}`
+        });
+        if (notification && notification.length > 0) {
+          notifications.push(...notification);
+          console.log(`[Notification Service] ✓ Created ${notification.length} visa notification(s)`);
+        } else {
+          console.log(`[Notification Service] ⚠️  No visa notification created (may already exist)`);
+        }
+      } else {
+        console.log(`[Notification Service] ⏭️  Visa expiry ${daysUntilExpiry} days away (outside 0-60 day range)`);
+      }
+    } else {
+      console.log('[Notification Service] ⏭️  No visa expiry date');
+    }
+
+    console.log(`[Notification Service] Immediate check completed: ${notifications.length} notification(s) created`);
+    return notifications;
+  } catch (error) {
+    console.error('[Notification Service] ❌ Error in immediate employee expiry check:', error);
+    console.error('[Notification Service] Error stack:', error.stack);
+    // Don't throw - we don't want to break employee creation/update
+    return [];
+  }
+}
+
 module.exports = {
   createNotificationIfNotExists,
   createNotificationForAllAdmins,
@@ -450,6 +633,7 @@ module.exports = {
   checkVatDue,
   checkInvoiceDue,
   runAllExpiryChecks,
-  generateNotificationKey
+  generateNotificationKey,
+  checkEmployeeExpiriesImmediate
 };
 

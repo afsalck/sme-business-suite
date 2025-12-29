@@ -12,6 +12,7 @@ import apiClient from "../services/apiClient";
 const AuthContext = createContext({
   user: null,
   role: null,
+  companyId: null,
   loading: true
 });
 
@@ -31,15 +32,16 @@ export function AuthProvider({ children }) {
       
       await currentUser.getIdToken(true); // Force refresh
       
-      // Get updated role from backend
+      // Get updated role and companyId from backend
       const { data } = await apiClient.get("/auth/me");
       
-      if (data?.user?.role) {
+      if (data?.user) {
         setUser(prevUser => ({
           ...prevUser,
-          role: data.user.role
+          role: data.user.role,
+          companyId: data.user.companyId
         }));
-        console.log(`✅ Role refreshed: ${data.user.role}`);
+        console.log(`✅ User data refreshed: role=${data.user.role}, companyId=${data.user.companyId}`);
       }
     } catch (err) {
       console.error("Failed to refresh role:", err.message);
@@ -103,20 +105,22 @@ export function AuthProvider({ children }) {
               uid: firebaseUser.uid,
               email: firebaseUser.email,
               displayName: firebaseUser.displayName,
-              role: "staff" // Default, will be updated by API call below
+              role: "staff", // Default, will be updated by API call below
+              companyId: 1 // Default, will be updated by API call below
             });
           }
           
-          // Try to get user role from backend (non-blocking, in background)
-          // This updates the role after redirect if successful
+          // Try to get user role and companyId from backend (non-blocking, in background)
+          // This updates the role and companyId after redirect if successful
           apiClient.get("/auth/me")
             .then(({ data }) => {
-              if (isMounted && data?.user?.role) {
+              if (isMounted && data?.user) {
                 setUser(prevUser => ({
                   ...prevUser,
-                  role: data.user.role
+                  role: data.user.role,
+                  companyId: data.user.companyId
                 }));
-                console.log(`✅ User role loaded: ${data.user.role}`);
+                console.log(`✅ User data loaded: role=${data.user.role}, companyId=${data.user.companyId}`);
               }
             })
             .catch((err) => {
@@ -132,7 +136,8 @@ export function AuthProvider({ children }) {
               uid: firebaseUser.uid,
               email: firebaseUser.email,
               displayName: firebaseUser.displayName,
-              role: "staff"
+              role: "staff",
+              companyId: 1
             });
           }
         }
@@ -191,6 +196,7 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       role: user?.role || null,
+      companyId: user?.companyId || null,
       loading,
       error,
       loginWithEmail,

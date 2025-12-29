@@ -37,6 +37,13 @@ export default function NotificationBell() {
     return () => clearInterval(interval);
   }, []);
 
+  // Refresh notifications when dropdown is opened
+  useEffect(() => {
+    if (isOpen) {
+      fetchNotifications();
+    }
+  }, [isOpen]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -59,10 +66,19 @@ export default function NotificationBell() {
       // Mark as read
       if (notification.status === 'unread') {
         await apiClient.patch(`/notifications/${notification.id}/read`);
-        setNotifications(prev => 
-          prev.map(n => n.id === notification.id ? { ...n, status: 'read' } : n)
-        );
-        setUnreadCount(prev => Math.max(0, prev - 1));
+        
+        // Remove from list (since we only show unread notifications)
+        setNotifications(prev => prev.filter(n => n.id !== notification.id));
+        
+        // Refresh unread count from server to ensure accuracy
+        try {
+          const countRes = await apiClient.get('/notifications/unread-count');
+          setUnreadCount(countRes.data.count || 0);
+        } catch (countError) {
+          // If count fetch fails, manually decrement
+          console.warn('[NotificationBell] Failed to refresh count, using manual decrement');
+          setUnreadCount(prev => Math.max(0, prev - 1));
+        }
       }
 
       // Navigate to link

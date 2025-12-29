@@ -7,7 +7,12 @@ const { sequelize } = require("../server/config/database");
 const Employee = require("../models/Employee");
 const Contract = require("../models/Contract");
 const LeaveRequest = require("../models/LeaveRequest");
+const EmployeeSalaryStructure = require("../models/EmployeeSalaryStructure");
+const EmployeeAttendance = require("../models/EmployeeAttendance");
+const EmployeeLeaveRecord = require("../models/EmployeeLeaveRecord");
+const PayrollRecord = require("../models/PayrollRecord");
 const { authorizeRole } = require("../server/middleware/authMiddleware");
+const { setTenantContext } = require("../server/middleware/tenantMiddleware");
 const { generateContractPdf } = require("../server/services/contractPdfService");
 
 const router = express.Router();
@@ -51,7 +56,7 @@ const upload = multer({
 // ==================== EMPLOYEE ROUTES ====================
 
 // GET /api/hr/employees - Get all employees (admin) or own profile (staff)
-router.get("/employees", async (req, res) => {
+router.get("/employees", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -60,16 +65,21 @@ router.get("/employees", async (req, res) => {
 
   try {
     if (req.user.role === "admin") {
-      // Admin can see all employees
+      // Admin can see all employees from their company (developers see all companies)
+      const { buildWhereClause } = require('../server/utils/queryHelpers');
       const employees = await Employee.findAll({
+        where: buildWhereClause(req, {}),
         order: [['createdAt', 'DESC']],
         raw: false
       });
       res.json(employees.map(emp => emp.get({ plain: true })));
     } else {
-      // Staff can only see their own profile (matching by email)
+      // Staff can only see their own profile (matching by email and company)
+      const { buildWhereClause } = require('../server/utils/queryHelpers');
       const employee = await Employee.findOne({
-        where: { email: req.user.email },
+        where: buildWhereClause(req, { 
+          email: req.user.email
+        }),
         raw: false
       });
       
@@ -86,7 +96,7 @@ router.get("/employees", async (req, res) => {
 });
 
 // GET /api/hr/employees/:id - Get single employee
-router.get("/employees/:id", async (req, res) => {
+router.get("/employees/:id", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -94,7 +104,12 @@ router.get("/employees/:id", async (req, res) => {
   }
 
   try {
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });
@@ -113,7 +128,7 @@ router.get("/employees/:id", async (req, res) => {
 });
 
 // POST /api/hr/employees - Create employee (admin only)
-router.post("/employees", authorizeRole("admin"), async (req, res) => {
+router.post("/employees", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -123,10 +138,27 @@ router.post("/employees", authorizeRole("admin"), async (req, res) => {
   try {
     const employee = await Employee.create({
       ...req.body,
+      companyId: req.companyId,  // ✅ Set companyId
       createdByUid: req.user.uid,
       createdByDisplayName: req.user.displayName || req.user.email,
       createdByEmail: req.user.email
     });
+    
+    // Immediately check for expiries and create notifications
+    try {
+      console.log('[HR] Checking employee expiries immediately for:', employee.fullName);
+      console.log('[HR] Passport expiry:', employee.passportExpiry);
+      console.log('[HR] Visa expiry:', employee.visaExpiry);
+      
+      const { checkEmployeeExpiriesImmediate } = require('../server/services/notificationService');
+      const notifications = await checkEmployeeExpiriesImmediate(employee);
+      
+      console.log(`[HR] Created ${notifications.length} notification(s) for employee ${employee.fullName}`);
+    } catch (notifError) {
+      // Don't fail employee creation if notification check fails
+      console.error('[HR] Notification check failed (non-critical):', notifError.message);
+      console.error('[HR] Notification error stack:', notifError.stack);
+    }
     
     res.status(201).json(employee.get({ plain: true }));
   } catch (error) {
@@ -136,7 +168,7 @@ router.post("/employees", authorizeRole("admin"), async (req, res) => {
 });
 
 // PUT /api/hr/employees/:id - Update employee
-router.put("/employees/:id", async (req, res) => {
+router.put("/employees/:id", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -144,7 +176,12 @@ router.put("/employees/:id", async (req, res) => {
   }
 
   try {
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });
@@ -155,7 +192,31 @@ router.put("/employees/:id", async (req, res) => {
       return res.status(403).json({ message: "Forbidden: You can only update your own profile" });
     }
 
+    // Check if passport or visa expiry is being updated
+    const expiryFieldsChanged = req.body.passportExpiry !== undefined || req.body.visaExpiry !== undefined;
+
     await employee.update(req.body);
+    
+    // If expiry fields were updated, check for notifications immediately
+    if (expiryFieldsChanged) {
+      try {
+        // Reload employee to get updated values
+        await employee.reload();
+        console.log('[HR] Expiry fields changed, checking notifications for:', employee.fullName);
+        console.log('[HR] Updated passport expiry:', employee.passportExpiry);
+        console.log('[HR] Updated visa expiry:', employee.visaExpiry);
+        
+        const { checkEmployeeExpiriesImmediate } = require('../server/services/notificationService');
+        const notifications = await checkEmployeeExpiriesImmediate(employee);
+        
+        console.log(`[HR] Created ${notifications.length} notification(s) for updated employee ${employee.fullName}`);
+      } catch (notifError) {
+        // Don't fail employee update if notification check fails
+        console.error('[HR] Notification check failed (non-critical):', notifError.message);
+        console.error('[HR] Notification error stack:', notifError.stack);
+      }
+    }
+    
     res.json(employee.get({ plain: true }));
   } catch (error) {
     console.error("[HR] Update employee error:", error);
@@ -164,38 +225,132 @@ router.put("/employees/:id", async (req, res) => {
 });
 
 // DELETE /api/hr/employees/:id - Delete employee (admin only)
-router.delete("/employees/:id", authorizeRole("admin"), async (req, res) => {
+router.delete("/employees/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
     return res.status(503).json({ message: "Database connection unavailable" });
   }
 
+  // Use transaction to ensure all related records are deleted
+  const transaction = await sequelize.transaction();
+
   try {
-    const employee = await Employee.findByPk(req.params.id);
+    const employeeId = parseInt(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
     
     if (!employee) {
+      await transaction.rollback();
       return res.status(404).json({ message: "Employee not found" });
     }
 
-    await employee.destroy();
-    res.json({ message: "Employee deleted successfully" });
+    console.log(`[HR] Deleting employee ${employeeId} and all related records...`);
+
+    // Delete all related records first (cascade delete)
+    // 1. Delete salary structure
+    await EmployeeSalaryStructure.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted salary structure for employee ${employeeId}`);
+
+    // 2. Delete attendance records
+    await EmployeeAttendance.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted attendance records for employee ${employeeId}`);
+
+    // 3. Delete leave records
+    await EmployeeLeaveRecord.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted leave records for employee ${employeeId}`);
+
+    // 4. Delete payroll records
+    await PayrollRecord.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted payroll records for employee ${employeeId}`);
+
+    // 5. Delete contracts
+    await Contract.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted contracts for employee ${employeeId}`);
+
+    // 6. Delete leave requests
+    await LeaveRequest.destroy({
+      where: { 
+        employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      },
+      transaction
+    });
+    console.log(`[HR] Deleted leave requests for employee ${employeeId}`);
+
+    // 7. Finally, delete the employee
+    await employee.destroy({ transaction });
+    console.log(`[HR] Deleted employee ${employeeId}`);
+
+    // Commit transaction
+    await transaction.commit();
+    res.json({ message: "Employee and all related records deleted successfully" });
   } catch (error) {
+    await transaction.rollback();
     console.error("[HR] Delete employee error:", error);
-    res.status(500).json({ message: "Failed to delete employee", error: error.message });
+    
+    // Provide user-friendly error message
+    let errorMessage = "Failed to delete employee";
+    if (error.name === 'SequelizeForeignKeyConstraintError') {
+      errorMessage = "Cannot delete employee. There are related records that prevent deletion. Please contact support.";
+    } else {
+      errorMessage = error.message || errorMessage;
+    }
+    
+    res.status(500).json({ message: errorMessage, error: error.message });
   }
 });
 
 // ==================== DOCUMENT UPLOAD ROUTES ====================
 
 // POST /api/hr/employees/:id/documents/passport
-router.post("/employees/:id/documents/passport", authorizeRole("admin"), upload.single("file"), async (req, res) => {
+router.post("/employees/:id/documents/passport", authorizeRole("admin"), setTenantContext, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     if (!employee) {
       // Delete uploaded file if employee not found
       fs.unlinkSync(req.file.path);
@@ -224,13 +379,18 @@ router.post("/employees/:id/documents/passport", authorizeRole("admin"), upload.
 });
 
 // POST /api/hr/employees/:id/documents/emirates-id
-router.post("/employees/:id/documents/emirates-id", authorizeRole("admin"), upload.single("file"), async (req, res) => {
+router.post("/employees/:id/documents/emirates-id", authorizeRole("admin"), setTenantContext, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     if (!employee) {
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: "Employee not found" });
@@ -257,13 +417,18 @@ router.post("/employees/:id/documents/emirates-id", authorizeRole("admin"), uplo
 });
 
 // POST /api/hr/employees/:id/documents/visa
-router.post("/employees/:id/documents/visa", authorizeRole("admin"), upload.single("file"), async (req, res) => {
+router.post("/employees/:id/documents/visa", authorizeRole("admin"), setTenantContext, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     if (!employee) {
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: "Employee not found" });
@@ -290,13 +455,18 @@ router.post("/employees/:id/documents/visa", authorizeRole("admin"), upload.sing
 });
 
 // POST /api/hr/employees/:id/documents/insurance
-router.post("/employees/:id/documents/insurance", authorizeRole("admin"), upload.single("file"), async (req, res) => {
+router.post("/employees/:id/documents/insurance", authorizeRole("admin"), setTenantContext, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     if (!employee) {
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: "Employee not found" });
@@ -332,7 +502,7 @@ function generateContractNumber() {
 }
 
 // GET /api/hr/contracts - Get all contracts
-router.get("/contracts", async (req, res) => {
+router.get("/contracts", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -344,23 +514,39 @@ router.get("/contracts", async (req, res) => {
     
     if (req.user.role === "admin") {
       contracts = await Contract.findAll({
+        where: {
+          companyId: req.companyId  // ✅ Filter by companyId
+        },
         order: [['createdAt', 'DESC']]
       });
       
       // Attach employee data manually
       for (const contract of contracts) {
-        const employee = await Employee.findByPk(contract.employeeId);
+        const employee = await Employee.findOne({
+          where: {
+            id: contract.employeeId,
+            companyId: req.companyId  // ✅ Filter by companyId
+          }
+        });
         contract.dataValues.employee = employee ? employee.get({ plain: true }) : null;
       }
     } else {
       // Staff can only see their own contracts
-      const employee = await Employee.findOne({ where: { email: req.user.email } });
+      const employee = await Employee.findOne({ 
+        where: { 
+          email: req.user.email,
+          companyId: req.companyId  // ✅ Filter by companyId
+        } 
+      });
       if (!employee) {
         return res.json([]);
       }
       
       contracts = await Contract.findAll({
-        where: { employeeId: employee.id },
+        where: { 
+          employeeId: employee.id,
+          companyId: req.companyId  // ✅ Filter by companyId
+        },
         order: [['createdAt', 'DESC']]
       });
       
@@ -378,7 +564,7 @@ router.get("/contracts", async (req, res) => {
 });
 
 // POST /api/hr/contracts - Create contract (admin only)
-router.post("/contracts", authorizeRole("admin"), async (req, res) => {
+router.post("/contracts", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -391,6 +577,7 @@ router.post("/contracts", authorizeRole("admin"), async (req, res) => {
     const contract = await Contract.create({
       ...req.body,
       contractNumber,
+      companyId: req.companyId,  // ✅ Set companyId
       createdByUid: req.user.uid,
       createdByDisplayName: req.user.displayName || req.user.email,
       createdByEmail: req.user.email
@@ -404,7 +591,7 @@ router.post("/contracts", authorizeRole("admin"), async (req, res) => {
 });
 
 // POST /api/hr/contracts/:id/generate-pdf - Generate contract PDF (admin only)
-router.post("/contracts/:id/generate-pdf", authorizeRole("admin"), async (req, res) => {
+router.post("/contracts/:id/generate-pdf", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -412,13 +599,23 @@ router.post("/contracts/:id/generate-pdf", authorizeRole("admin"), async (req, r
   }
 
   try {
-    const contract = await Contract.findByPk(req.params.id);
+    const contract = await Contract.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
 
     if (!contract) {
       return res.status(404).json({ message: "Contract not found" });
     }
 
-    const employee = await Employee.findByPk(contract.employeeId);
+    const employee = await Employee.findOne({
+      where: {
+        id: contract.employeeId,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });
     }
@@ -459,7 +656,7 @@ router.post("/contracts/:id/generate-pdf", authorizeRole("admin"), async (req, r
 });
 
 // GET /api/hr/contracts/:id/download - Download contract PDF
-router.get("/contracts/:id/download", async (req, res) => {
+router.get("/contracts/:id/download", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -467,7 +664,12 @@ router.get("/contracts/:id/download", async (req, res) => {
   }
 
   try {
-    const contract = await Contract.findByPk(req.params.id);
+    const contract = await Contract.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
 
     if (!contract) {
       return res.status(404).json({ message: "Contract not found" });
@@ -475,7 +677,12 @@ router.get("/contracts/:id/download", async (req, res) => {
 
     // Staff can only download their own contracts
     if (req.user.role === "staff") {
-      const employee = await Employee.findOne({ where: { email: req.user.email } });
+      const employee = await Employee.findOne({ 
+        where: { 
+          email: req.user.email,
+          companyId: req.companyId  // ✅ Filter by companyId
+        } 
+      });
       if (!employee || contract.employeeId !== employee.id) {
         return res.status(403).json({ message: "Forbidden: You can only download your own contracts" });
       }
@@ -515,7 +722,7 @@ function calculateLeaveBalance(joiningDate) {
 }
 
 // GET /api/hr/leave-requests - Get all leave requests
-router.get("/leave-requests", async (req, res) => {
+router.get("/leave-requests", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -527,23 +734,39 @@ router.get("/leave-requests", async (req, res) => {
     
     if (req.user.role === "admin") {
       leaveRequests = await LeaveRequest.findAll({
+        where: {
+          companyId: req.companyId  // ✅ Filter by companyId
+        },
         order: [['createdAt', 'DESC']]
       });
       
       // Attach employee data manually
       for (const leave of leaveRequests) {
-        const employee = await Employee.findByPk(leave.employeeId);
+        const employee = await Employee.findOne({
+          where: {
+            id: leave.employeeId,
+            companyId: req.companyId  // ✅ Filter by companyId
+          }
+        });
         leave.dataValues.employee = employee ? employee.get({ plain: true }) : null;
       }
     } else {
       // Staff can only see their own leave requests
-      const employee = await Employee.findOne({ where: { email: req.user.email } });
+      const employee = await Employee.findOne({ 
+        where: { 
+          email: req.user.email,
+          companyId: req.companyId  // ✅ Filter by companyId
+        } 
+      });
       if (!employee) {
         return res.json([]);
       }
       
       leaveRequests = await LeaveRequest.findAll({
-        where: { employeeId: employee.id },
+        where: { 
+          employeeId: employee.id,
+          companyId: req.companyId  // ✅ Filter by companyId
+        },
         order: [['createdAt', 'DESC']]
       });
       
@@ -561,7 +784,7 @@ router.get("/leave-requests", async (req, res) => {
 });
 
 // POST /api/hr/leave-requests - Apply for leave (staff)
-router.post("/leave-requests", async (req, res) => {
+router.post("/leave-requests", setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -570,7 +793,12 @@ router.post("/leave-requests", async (req, res) => {
 
   try {
     // Find employee by email, or create one if it doesn't exist
-    let employee = await Employee.findOne({ where: { email: req.user.email } });
+    let employee = await Employee.findOne({ 
+      where: { 
+        email: req.user.email,
+        companyId: req.companyId  // ✅ Filter by companyId
+      } 
+    });
     if (!employee) {
       // Auto-create employee profile for staff member
       // Set default expiry dates (1 year from now) for required fields
@@ -588,6 +816,7 @@ router.post("/leave-requests", async (req, res) => {
         insuranceStatus: "active",
         visaExpiry: defaultExpiryDate, // Required by database schema
         passportExpiry: defaultExpiryDate, // Required by database schema
+        companyId: req.companyId,  // ✅ Set companyId
         createdByUid: req.user.uid,
         createdByDisplayName: req.user.displayName || req.user.email,
         createdByEmail: req.user.email
@@ -610,6 +839,7 @@ router.post("/leave-requests", async (req, res) => {
     const approvedLeaves = await LeaveRequest.findAll({
       where: {
         employeeId: employee.id,
+        companyId: req.companyId,  // ✅ Filter by companyId
         status: "approved",
         [sequelize.Sequelize.Op.and]: [
           sequelize.where(sequelize.fn("YEAR", sequelize.col("startDate")), currentYear)
@@ -633,6 +863,7 @@ router.post("/leave-requests", async (req, res) => {
       endDate,
       totalDays,
       reason,
+      companyId: req.companyId,  // ✅ Set companyId
       createdByUid: req.user.uid,
       createdByDisplayName: req.user.displayName || req.user.email,
       createdByEmail: req.user.email
@@ -646,7 +877,7 @@ router.post("/leave-requests", async (req, res) => {
 });
 
 // PUT /api/hr/leave-requests/:id/approve - Approve leave (admin only)
-router.put("/leave-requests/:id/approve", authorizeRole("admin"), async (req, res) => {
+router.put("/leave-requests/:id/approve", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -654,7 +885,12 @@ router.put("/leave-requests/:id/approve", authorizeRole("admin"), async (req, re
   }
 
   try {
-    const leaveRequest = await LeaveRequest.findByPk(req.params.id);
+    const leaveRequest = await LeaveRequest.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     
     if (!leaveRequest) {
       return res.status(404).json({ message: "Leave request not found" });
@@ -674,7 +910,7 @@ router.put("/leave-requests/:id/approve", authorizeRole("admin"), async (req, re
 });
 
 // PUT /api/hr/leave-requests/:id/reject - Reject leave (admin only)
-router.put("/leave-requests/:id/reject", authorizeRole("admin"), async (req, res) => {
+router.put("/leave-requests/:id/reject", authorizeRole("admin"), setTenantContext, async (req, res) => {
   try {
     await sequelize.authenticate();
   } catch (dbError) {
@@ -682,7 +918,12 @@ router.put("/leave-requests/:id/reject", authorizeRole("admin"), async (req, res
   }
 
   try {
-    const leaveRequest = await LeaveRequest.findByPk(req.params.id);
+    const leaveRequest = await LeaveRequest.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId  // ✅ Filter by companyId
+      }
+    });
     
     if (!leaveRequest) {
       return res.status(404).json({ message: "Leave request not found" });

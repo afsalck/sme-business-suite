@@ -8,19 +8,21 @@ import EmptyState from "../components/EmptyState";
 import { formatCurrency } from "../utils/formatters";
 import useAuth from "../hooks/useAuth";
 
+// Leave types - will be translated using t()
 const LEAVE_TYPES = [
-  { value: "annual", label: "Annual Leave" },
-  { value: "sick", label: "Sick Leave" },
-  { value: "personal", label: "Personal Leave" },
-  { value: "emergency", label: "Emergency Leave" },
-  { value: "unpaid", label: "Unpaid Leave" }
+  { value: "annual", labelKey: "hr.annualLeave" },
+  { value: "sick", labelKey: "hr.sickLeave" },
+  { value: "personal", labelKey: "hr.personalLeave" },
+  { value: "emergency", labelKey: "hr.emergencyLeave" },
+  { value: "unpaid", labelKey: "hr.unpaidLeave" }
 ];
 
+// Contract types - will be translated using t()
 const CONTRACT_TYPES = [
-  { value: "full-time", label: "Full-Time" },
-  { value: "part-time", label: "Part-Time" },
-  { value: "contract", label: "Contract" },
-  { value: "temporary", label: "Temporary" }
+  { value: "full-time", labelKey: "hr.fullTime" },
+  { value: "part-time", labelKey: "hr.partTime" },
+  { value: "contract", labelKey: "hr.contract" },
+  { value: "temporary", labelKey: "hr.temporary" }
 ];
 
 export default function HRPage({ language }) {
@@ -51,7 +53,8 @@ export default function HRPage({ language }) {
     contractType: "full-time",
     basicSalary: "",
     allowance: "",
-    joiningDate: ""
+    joiningDate: "",
+    notes: ""
   });
   const [savingEmployee, setSavingEmployee] = useState(false);
 
@@ -139,11 +142,12 @@ export default function HRPage({ language }) {
         contractType: "full-time",
         basicSalary: "",
         allowance: "",
-        joiningDate: ""
+        joiningDate: "",
+        notes: ""
       });
     } catch (err) {
       console.error("Failed to save employee:", err);
-      alert(err.response?.data?.message || "Failed to save employee");
+      alert(err.response?.data?.message || t("hr.failedToSave"));
     } finally {
       setSavingEmployee(false);
     }
@@ -151,7 +155,7 @@ export default function HRPage({ language }) {
 
   const handleEditEmployee = (employee) => {
     if (!isAdmin && employee.email !== uid) {
-      alert("You can only edit your own profile");
+      alert(t("hr.onlyEditOwn"));
       return;
     }
     setSelectedEmployee(employee);
@@ -171,19 +175,36 @@ export default function HRPage({ language }) {
       contractType: employee.contractType || "full-time",
       basicSalary: employee.basicSalary || "",
       allowance: employee.allowance || "",
-      joiningDate: employee.joiningDate ? dayjs(employee.joiningDate).format("YYYY-MM-DD") : ""
+      joiningDate: employee.joiningDate ? dayjs(employee.joiningDate).format("YYYY-MM-DD") : "",
+      notes: employee.notes || ""
     });
     setShowEmployeeForm(true);
   };
 
   const handleDeleteEmployee = async (employee) => {
     if (!isAdmin) return;
-    if (!window.confirm(`Delete ${employee.fullName}?`)) return;
+    if (!window.confirm(t("hr.deleteConfirm", { name: employee.fullName || employee.name }))) return;
+    
+    const employeeId = employee.id || employee._id;
+    if (!employeeId) {
+      alert("Error: Employee ID not found");
+      console.error("Employee object:", employee);
+      return;
+    }
+    
     try {
-      await apiClient.delete(`/hr/employees/${employee.id}`);
-      setEmployees(prev => prev.filter(emp => emp.id !== employee.id));
+      console.log("[HR] Deleting employee:", employeeId, employee.fullName || employee.name);
+      const response = await apiClient.delete(`/hr/employees/${employeeId}`);
+      console.log("[HR] Delete response:", response.data);
+      
+      // Reload employees list to ensure UI is in sync
+      await loadData();
+      
+      alert(t("hr.employeeDeleted"));
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to delete employee");
+      console.error("[HR] Delete employee error:", err);
+      const errorMessage = err.response?.data?.message || err.message || "Failed to delete employee";
+      alert(`${t("common.error")}: ${errorMessage}`);
     }
   };
 
@@ -200,9 +221,9 @@ export default function HRPage({ language }) {
       });
       
       await loadData();
-      alert("Document uploaded successfully");
+      alert(t("hr.documentUploaded"));
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to upload document");
+      alert(err.response?.data?.message || t("hr.failedToUpload"));
     } finally {
       setUploadingDoc(false);
       setDocType("");
@@ -228,7 +249,7 @@ export default function HRPage({ language }) {
         terms: ""
       });
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to create contract");
+      alert(err.response?.data?.message || t("hr.failedToCreateContract"));
     } finally {
       setSavingContract(false);
     }
@@ -247,7 +268,7 @@ export default function HRPage({ language }) {
       link.click();
       link.remove();
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to generate PDF");
+      alert(err.response?.data?.message || t("hr.failedToGeneratePdf"));
     }
   };
 
@@ -265,7 +286,7 @@ export default function HRPage({ language }) {
         reason: ""
       });
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to submit leave request");
+      alert(err.response?.data?.message || t("hr.failedToSubmit"));
     } finally {
       setSavingLeave(false);
     }
@@ -277,7 +298,7 @@ export default function HRPage({ language }) {
       const { data } = await apiClient.put(`/hr/leave-requests/${leaveId}/approve`);
       setLeaveRequests(prev => prev.map(leave => leave.id === leaveId ? data : leave));
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to approve leave");
+      alert(err.response?.data?.message || t("hr.failedToApprove"));
     }
   };
 
@@ -287,7 +308,7 @@ export default function HRPage({ language }) {
       const { data } = await apiClient.put(`/hr/leave-requests/${leaveId}/reject`, { reason });
       setLeaveRequests(prev => prev.map(leave => leave.id === leaveId ? data : leave));
     } catch (err) {
-      alert(err.response?.data?.message || "Failed to reject leave");
+      alert(err.response?.data?.message || t("hr.failedToReject"));
     }
   };
 
@@ -299,7 +320,7 @@ export default function HRPage({ language }) {
     <div className={clsx("space-y-6", language === "ar" && "rtl")}>
       {/* Header */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold text-slate-800">HR Management</h2>
+        <h2 className="text-2xl font-semibold text-slate-800">{t("hr.title")}</h2>
       </div>
 
       {/* Tabs */}
@@ -314,7 +335,7 @@ export default function HRPage({ language }) {
                 : "text-slate-600 hover:text-slate-900"
             )}
           >
-            Employees
+            {t("hr.employees")}
           </button>
           <button
             onClick={() => setActiveTab("contracts")}
@@ -325,7 +346,7 @@ export default function HRPage({ language }) {
                 : "text-slate-600 hover:text-slate-900"
             )}
           >
-            Contracts
+            {t("hr.contracts")}
           </button>
           <button
             onClick={() => setActiveTab("leave")}
@@ -336,7 +357,7 @@ export default function HRPage({ language }) {
                 : "text-slate-600 hover:text-slate-900"
             )}
           >
-            Leave Requests
+            {t("hr.leaveRequests")}
           </button>
         </div>
 
@@ -351,19 +372,19 @@ export default function HRPage({ language }) {
                 }}
                 className="mb-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
               >
-                + Add Employee
+                + {t("hr.addEmployee")}
               </button>
             )}
 
             {showEmployeeForm && (
               <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-6">
                 <h3 className="mb-4 text-lg font-semibold">
-                  {selectedEmployee ? "Edit Employee" : "Add Employee"}
+                  {selectedEmployee ? t("hr.editEmployee") : t("hr.addEmployee")}
                 </h3>
                 <form onSubmit={handleEmployeeSubmit} className="space-y-4">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Full Name *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.fullName")} *</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -373,7 +394,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Email</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.email")}</label>
                       <input
                         type="email"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -382,7 +403,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Phone</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.phone")}</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -391,7 +412,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Nationality</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.nationality")}</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -400,7 +421,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Emirates ID</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.emiratesId")}</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -409,7 +430,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Passport Number</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.passportNumber")}</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -418,7 +439,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Passport Expiry</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.passportExpiry")}</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -427,7 +448,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Visa Expiry</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.visaExpiry")}</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -436,7 +457,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Insurance Expiry</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.insuranceExpiry")}</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -445,7 +466,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Designation</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.designation")}</label>
                       <input
                         type="text"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -454,19 +475,19 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Contract Type</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.contractType")}</label>
                       <select
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         value={employeeForm.contractType}
                         onChange={(e) => setEmployeeForm(prev => ({ ...prev, contractType: e.target.value }))}
                       >
                         {CONTRACT_TYPES.map(type => (
-                          <option key={type.value} value={type.value}>{type.label}</option>
+                          <option key={type.value} value={type.value}>{t(type.labelKey)}</option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Basic Salary</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.basicSalary")}</label>
                       <input
                         type="number"
                         step="0.01"
@@ -486,7 +507,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Joining Date</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.joiningDate")}</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -495,13 +516,23 @@ export default function HRPage({ language }) {
                       />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600">{t("hr.notes")}</label>
+                    <textarea
+                      rows={3}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                      value={employeeForm.notes || ""}
+                      onChange={(e) => setEmployeeForm(prev => ({ ...prev, notes: e.target.value }))}
+                      placeholder={t("hr.notes")}
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <button
                       type="submit"
                       disabled={savingEmployee}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-60"
                     >
-                      {savingEmployee ? "Saving..." : (selectedEmployee ? "Update" : "Create")}
+                      {savingEmployee ? t("hr.saving") : (selectedEmployee ? t("hr.update") : t("hr.create"))}
                     </button>
                     <button
                       type="button"
@@ -519,17 +550,17 @@ export default function HRPage({ language }) {
             )}
 
             {employees.length === 0 ? (
-              <EmptyState title="No employees found" />
+              <EmptyState title={t("hr.noEmployees")} />
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Name</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Email</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Designation</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Salary</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Actions</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.fullName")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.email")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.designation")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("employees.salary")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("common.actions")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -550,7 +581,7 @@ export default function HRPage({ language }) {
                               onClick={() => handleEditEmployee(emp)}
                               className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-200"
                             >
-                              Edit
+                              {t("common.edit")}
                             </button>
                             {isAdmin && (
                               <>
@@ -558,10 +589,10 @@ export default function HRPage({ language }) {
                                   onClick={() => handleDeleteEmployee(emp)}
                                   className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
                                 >
-                                  Delete
+                                  {t("common.delete")}
                                 </button>
                                 <label className="rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-200 cursor-pointer">
-                                  Upload Doc
+                                  {t("hr.uploadDoc")}
                                   <input
                                     type="file"
                                     accept=".pdf,.jpg,.jpeg,.png"
@@ -604,31 +635,31 @@ export default function HRPage({ language }) {
                 onClick={() => setShowContractForm(true)}
                 className="mb-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
               >
-                + Create Contract
+                + {t("hr.createContract")}
               </button>
             )}
 
             {showContractForm && (
               <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-6">
-                <h3 className="mb-4 text-lg font-semibold">Create Contract</h3>
+                <h3 className="mb-4 text-lg font-semibold">{t("hr.createContract")}</h3>
                 <form onSubmit={handleContractSubmit} className="space-y-4">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Employee *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.employee")} *</label>
                       <select
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         value={contractForm.employeeId}
                         onChange={(e) => setContractForm(prev => ({ ...prev, employeeId: e.target.value }))}
                         required
                       >
-                        <option value="">Select Employee</option>
+                        <option value="">{t("hr.selectEmployee")}</option>
                         {employees.map(emp => (
                           <option key={emp.id} value={emp.id}>{emp.fullName || emp.name}</option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Contract Type *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.contractType")} *</label>
                       <select
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         value={contractForm.contractType}
@@ -636,7 +667,7 @@ export default function HRPage({ language }) {
                         required
                       >
                         {CONTRACT_TYPES.map(type => (
-                          <option key={type.value} value={type.value}>{type.label}</option>
+                          <option key={type.value} value={type.value}>{t(type.labelKey)}</option>
                         ))}
                       </select>
                     </div>
@@ -651,7 +682,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">End Date</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.endDate")}</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -692,7 +723,7 @@ export default function HRPage({ language }) {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-600">Terms</label>
+                    <label className="block text-sm font-medium text-slate-600">{t("hr.terms")}</label>
                     <textarea
                       rows={4}
                       className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -706,14 +737,14 @@ export default function HRPage({ language }) {
                       disabled={savingContract}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-60"
                     >
-                      {savingContract ? "Creating..." : "Create Contract"}
+                      {savingContract ? t("hr.creating") : t("hr.createContract")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowContractForm(false)}
                       className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </form>
@@ -721,18 +752,18 @@ export default function HRPage({ language }) {
             )}
 
             {contracts.length === 0 ? (
-              <EmptyState title="No contracts found" />
+              <EmptyState title={t("hr.noContracts")} />
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Contract #</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Employee</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Type</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Start Date</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Salary</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Actions</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.contractNumber")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.employee")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.type")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.startDate")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("employees.salary")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("common.actions")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -759,7 +790,7 @@ export default function HRPage({ language }) {
                                 onClick={() => handleGenerateContractPDF(contract.id)}
                                 className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-200"
                               >
-                                Generate PDF
+                                {t("hr.generatePdf")}
                               </button>
                             )}
                             {contract.pdfUrl && (
@@ -768,7 +799,7 @@ export default function HRPage({ language }) {
                                 download
                                 className="rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-200"
                               >
-                                Download
+                                {t("hr.download")}
                               </a>
                             )}
                           </div>
@@ -789,16 +820,16 @@ export default function HRPage({ language }) {
               onClick={() => setShowLeaveForm(true)}
               className="mb-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
             >
-              + Apply for Leave
+              + {t("hr.applyForLeave")}
             </button>
 
             {showLeaveForm && (
               <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-6">
-                <h3 className="mb-4 text-lg font-semibold">Apply for Leave</h3>
+                <h3 className="mb-4 text-lg font-semibold">{t("hr.applyForLeave")}</h3>
                 <form onSubmit={handleLeaveSubmit} className="space-y-4">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Leave Type *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.leaveType")} *</label>
                       <select
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         value={leaveForm.leaveType}
@@ -806,12 +837,12 @@ export default function HRPage({ language }) {
                         required
                       >
                         {LEAVE_TYPES.map(type => (
-                          <option key={type.value} value={type.value}>{type.label}</option>
+                          <option key={type.value} value={type.value}>{t(type.labelKey)}</option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">Start Date *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.startDate")} *</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -821,7 +852,7 @@ export default function HRPage({ language }) {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-600">End Date *</label>
+                      <label className="block text-sm font-medium text-slate-600">{t("hr.endDate")} *</label>
                       <input
                         type="date"
                         className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -832,7 +863,7 @@ export default function HRPage({ language }) {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-600">Reason</label>
+                    <label className="block text-sm font-medium text-slate-600">{t("hr.reason")}</label>
                     <textarea
                       rows={3}
                       className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -846,14 +877,14 @@ export default function HRPage({ language }) {
                       disabled={savingLeave}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-60"
                     >
-                      {savingLeave ? "Submitting..." : "Submit Request"}
+                      {savingLeave ? t("hr.submitting") : t("hr.submitRequest")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowLeaveForm(false)}
                       className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </form>
@@ -861,19 +892,19 @@ export default function HRPage({ language }) {
             )}
 
             {leaveRequests.length === 0 ? (
-              <EmptyState title="No leave requests found" />
+              <EmptyState title={t("hr.noLeaveRequests")} />
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200 text-sm">
                   <thead className="bg-slate-50">
                     <tr>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Employee</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Type</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Start Date</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">End Date</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Days</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Status</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-500">Actions</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.employee")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.type")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.startDate")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.endDate")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("hr.days")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("common.status")}</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-500">{t("common.actions")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
@@ -889,7 +920,7 @@ export default function HRPage({ language }) {
                         <td className="px-3 py-3">
                           {dayjs(leave.endDate).format("YYYY-MM-DD")}
                         </td>
-                        <td className="px-3 py-3">{leave.totalDays} days</td>
+                        <td className="px-3 py-3">{leave.totalDays} {t("hr.days")}</td>
                         <td className="px-3 py-3">
                           <span
                             className={clsx(
@@ -901,7 +932,7 @@ export default function HRPage({ language }) {
                                 : "bg-yellow-100 text-yellow-700"
                             )}
                           >
-                            {leave.status}
+                            {t(`hr.${leave.status}`)}
                           </span>
                         </td>
                         <td className="px-3 py-3">
@@ -911,16 +942,16 @@ export default function HRPage({ language }) {
                                 onClick={() => handleApproveLeave(leave.id)}
                                 className="rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-700 hover:bg-green-200"
                               >
-                                Approve
+                                {t("hr.approve")}
                               </button>
                               <button
                                 onClick={() => {
-                                  const reason = prompt("Rejection reason:");
+                                  const reason = prompt(t("hr.rejectionReason"));
                                   if (reason) handleRejectLeave(leave.id, reason);
                                 }}
                                 className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
                               >
-                                Reject
+                                {t("hr.reject")}
                               </button>
                             </div>
                           )}

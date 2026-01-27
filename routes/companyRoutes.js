@@ -5,6 +5,29 @@ const { setTenantContext } = require('../server/middleware/tenantMiddleware');
 const Company = require('../models/Company');
 const { sequelize } = require('../server/config/database');
 
+// Helper to check if user is developer
+function isDeveloperEmail(email) {
+  if (!email) return false;
+  const emailLower = email.toLowerCase();
+  const developerDomains = ['@bizease.ae', '@developer.com'];
+  if (developerDomains.some(domain => emailLower.endsWith(domain))) {
+    return true;
+  }
+  const developerEmails = ['developer@bizease.ae', 'admin@bizease.ae'];
+  if (developerEmails.includes(emailLower)) {
+    return true;
+  }
+  if (process.env.DEVELOPER_EMAILS) {
+    const allowedEmails = process.env.DEVELOPER_EMAILS
+      .split(',')
+      .map(e => e.trim().toLowerCase());
+    if (allowedEmails.includes(emailLower)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Log route registration
 console.log('[Company Routes] ✓ Routes module loaded');
 console.log('[Company Routes] Registered routes:');
@@ -35,6 +58,7 @@ console.log('  - PUT    /api/company');
           [phone] NVARCHAR(50) NULL,
           [website] NVARCHAR(255) NULL,
           [logo] NVARCHAR(500) NULL,
+          [enabledModules] NTEXT NULL,
           [createdAt] DATETIME NOT NULL DEFAULT GETDATE(),
           [updatedAt] DATETIME NOT NULL DEFAULT GETDATE()
         );
@@ -66,24 +90,45 @@ console.log('  - PUT    /api/company');
  */
 
 /**
- * Get all companies (Admin only)
+ * Get all companies (Admin only, or Developers)
  * GET /api/company/admin/all
  */
-router.get('/admin/all', authorizeRole('admin'), async (req, res) => {
+router.get('/admin/all', async (req, res) => {
   try {
-    console.log('[Company Admin] Getting all companies...');
+    // Check if user is authenticated
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    // Allow access if user is admin OR developer
+    const isDev = isDeveloperEmail(req.user.email);
+    if (req.user.role !== 'admin' && !isDev) {
+      console.log(`[Company Admin] ❌ Access denied: User ${req.user.email} (role: ${req.user.role}) is not admin or developer`);
+      return res.status(403).json({ 
+        message: "Forbidden: Admin or Developer access required" 
+      });
+    }
+
+    console.log(`[Company Admin] Getting all companies... (User: ${req.user.email}, Role: ${req.user.role}, Developer: ${isDev})`);
     
     const companies = await Company.findAll({
       order: [['companyId', 'ASC']],
-      attributes: ['id', 'companyId', 'name', 'shopName', 'address', 'trn', 'email', 'phone', 'website', 'createdAt', 'updatedAt']
+      attributes: ['id', 'companyId', 'name', 'shopName', 'address', 'trn', 'email', 'phone', 'website', 'enabledModules', 'createdAt', 'updatedAt']
     });
 
     // Get email domains for each company
-    const CompanyEmailDomain = require('../models/CompanyEmailDomain');
-    const domains = await CompanyEmailDomain.findAll({
-      where: { isActive: true },
-      attributes: ['companyId', 'emailDomain']
-    });
+    let domains = [];
+    try {
+      const CompanyEmailDomain = require('../models/CompanyEmailDomain');
+      domains = await CompanyEmailDomain.findAll({
+        where: { isActive: true },
+        attributes: ['companyId', 'emailDomain']
+      });
+    } catch (domainError) {
+      console.warn('[Company Admin] ⚠️ Could not load email domains:', domainError.message);
+      // Continue without domains - not critical
+      domains = [];
+    }
 
     // Group domains by companyId
     const domainsByCompany = {};
@@ -94,20 +139,55 @@ router.get('/admin/all', authorizeRole('admin'), async (req, res) => {
       domainsByCompany[d.companyId].push(d.emailDomain);
     });
 
-    // Add domains to companies
+    // Add domains to companies and parse enabledModules
     const companiesWithDomains = companies.map(company => {
       const companyData = company.get({ plain: true });
       companyData.emailDomains = domainsByCompany[companyData.companyId] || [];
+      // Parse enabledModules JSON if it exists
+      if (companyData.enabledModules) {
+        try {
+          companyData.enabledModules = typeof companyData.enabledModules === 'string' 
+            ? JSON.parse(companyData.enabledModules) 
+            : companyData.enabledModules;
+        } catch (e) {
+          companyData.enabledModules = null;
+        }
+      } else {
+        companyData.enabledModules = null;
+      }
       return companyData;
     });
 
     console.log(`[Company Admin] ✓ Found ${companiesWithDomains.length} companies`);
     res.json(companiesWithDomains);
   } catch (error) {
-    console.error('[Company Admin] ✗ Get all companies error:', error);
+    console.error('='.repeat(60));
+    console.error('[Company Admin] ✗ Get all companies error:');
+    console.error('Error message:', error.message);
+    console.error('Error name:', error.name);
+    console.error('Error stack:', error.stack);
+    console.error('='.repeat(60));
+    
+    // Check if it's a database connection error
+    if (error.message && error.message.includes('timeout')) {
+      return res.status(503).json({ 
+        message: 'Database connection timeout. Please try again.',
+        error: 'Database unavailable'
+      });
+    }
+    
+    // Check if it's a table doesn't exist error
+    if (error.message && (error.message.includes('Invalid object name') || error.message.includes('does not exist'))) {
+      return res.status(500).json({ 
+        message: 'Companies table not found. Please run database migration.',
+        error: error.message
+      });
+    }
+    
     res.status(500).json({ 
       message: 'Failed to get companies', 
-      error: error.message
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -192,7 +272,7 @@ router.put('/admin/:companyId', authorizeRole('admin'), async (req, res) => {
     console.log('Request body:', req.body);
     
     const companyId = parseInt(req.params.companyId);
-    const { name, shopName, address, trn, email, phone, website, logo } = req.body;
+    const { name, shopName, address, trn, email, phone, website, logo, enabledModules } = req.body;
 
     if (!companyId || isNaN(companyId)) {
       console.error('[Company Admin] ❌ Invalid companyId:', req.params.companyId);
@@ -248,6 +328,12 @@ router.put('/admin/:companyId', authorizeRole('admin'), async (req, res) => {
       updateFields.push('logo = :logo');
       replacements.logo = logo || null;
     }
+    if (enabledModules !== undefined) {
+      updateFields.push('enabledModules = :enabledModules');
+      replacements.enabledModules = enabledModules === null || enabledModules === undefined 
+        ? null 
+        : JSON.stringify(Array.isArray(enabledModules) ? enabledModules : []);
+    }
 
     if (updateFields.length > 0) {
       updateFields.push('updatedAt = GETDATE()');
@@ -271,6 +357,18 @@ router.put('/admin/:companyId', authorizeRole('admin'), async (req, res) => {
     }
 
     const companyData = company.get({ plain: true });
+    // Parse enabledModules JSON if it exists
+    if (companyData.enabledModules) {
+      try {
+        companyData.enabledModules = typeof companyData.enabledModules === 'string' 
+          ? JSON.parse(companyData.enabledModules) 
+          : companyData.enabledModules;
+      } catch (e) {
+        companyData.enabledModules = null;
+      }
+    } else {
+      companyData.enabledModules = null;
+    }
     console.log('[Company Admin] ✅ Returning updated company:', companyData);
     res.json(companyData);
   } catch (error) {
@@ -288,7 +386,7 @@ router.put('/admin/:companyId', authorizeRole('admin'), async (req, res) => {
  */
 router.post('/admin/create', authorizeRole('admin'), async (req, res) => {
   try {
-    const { name, shopName, emailDomain, address, trn, email, phone, website } = req.body;
+    const { name, shopName, emailDomain, address, trn, email, phone, website, enabledModules } = req.body;
 
     if (!name) {
       return res.status(400).json({ message: 'Company name is required' });
@@ -316,7 +414,10 @@ router.post('/admin/create', authorizeRole('admin'), async (req, res) => {
       trn: trn || null,
       email: email || `info@${emailDomain}`,
       phone: phone || null,
-      website: website || null
+      website: website || null,
+      enabledModules: enabledModules === null || enabledModules === undefined 
+        ? null 
+        : (Array.isArray(enabledModules) ? enabledModules : [])
     });
 
     console.log(`[Company Admin] ✓ Company created: ${company.name} (companyId: ${company.companyId})`);
@@ -372,6 +473,18 @@ router.post('/admin/create', authorizeRole('admin'), async (req, res) => {
 
     const companyData = company.get({ plain: true });
     companyData.emailDomains = domains.map(d => d.emailDomain);
+    // Parse enabledModules JSON if it exists
+    if (companyData.enabledModules) {
+      try {
+        companyData.enabledModules = typeof companyData.enabledModules === 'string' 
+          ? JSON.parse(companyData.enabledModules) 
+          : companyData.enabledModules;
+      } catch (e) {
+        companyData.enabledModules = null;
+      }
+    } else {
+      companyData.enabledModules = null;
+    }
 
     res.status(201).json(companyData);
   } catch (error) {
@@ -427,7 +540,20 @@ router.get('/', setTenantContext, async (req, res) => {
       console.log('[Company] ✓ Company found:', company.name);
     }
 
-    res.json(company.get({ plain: true }));
+    const companyData = company.get({ plain: true });
+    // Parse enabledModules JSON if it exists
+    if (companyData.enabledModules) {
+      try {
+        companyData.enabledModules = typeof companyData.enabledModules === 'string' 
+          ? JSON.parse(companyData.enabledModules) 
+          : companyData.enabledModules;
+      } catch (e) {
+        companyData.enabledModules = null;
+      }
+    } else {
+      companyData.enabledModules = null;
+    }
+    res.json(companyData);
   } catch (error) {
     console.error('[Company] ✗ Get company error:', error);
     console.error('[Company] Error details:', {
@@ -450,7 +576,7 @@ router.get('/', setTenantContext, async (req, res) => {
 router.put('/', authorizeRole('admin'), setTenantContext, async (req, res) => {
   try {
     const companyId = req.companyId || 1; // ✅ Get from tenant context
-    const { name, shopName, address, trn, email, phone, website, logo } = req.body;
+    const { name, shopName, address, trn, email, phone, website, logo, enabledModules } = req.body;
 
     console.log('[Company] Updating company:', { companyId, name, shopName });
 
@@ -530,6 +656,12 @@ router.put('/', authorizeRole('admin'), setTenantContext, async (req, res) => {
         updateFields.push('logo = :logo');
         replacements.logo = logo || null;
       }
+      if (enabledModules !== undefined) {
+        updateFields.push('enabledModules = :enabledModules');
+        replacements.enabledModules = enabledModules === null || enabledModules === undefined 
+          ? null 
+          : JSON.stringify(Array.isArray(enabledModules) ? enabledModules : []);
+      }
 
       if (updateFields.length > 0) {
         updateFields.push('updatedAt = :updatedAt');
@@ -553,7 +685,20 @@ router.put('/', authorizeRole('admin'), setTenantContext, async (req, res) => {
       }
     }
 
-    res.json(company.get({ plain: true }));
+    const companyData = company.get({ plain: true });
+    // Parse enabledModules JSON if it exists
+    if (companyData.enabledModules) {
+      try {
+        companyData.enabledModules = typeof companyData.enabledModules === 'string' 
+          ? JSON.parse(companyData.enabledModules) 
+          : companyData.enabledModules;
+      } catch (e) {
+        companyData.enabledModules = null;
+      }
+    } else {
+      companyData.enabledModules = null;
+    }
+    res.json(companyData);
   } catch (error) {
     console.error('[Company] ✗ Update company error:', error);
     console.error('[Company] Error details:', {

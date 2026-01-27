@@ -574,34 +574,58 @@ Example for a Cash account (Asset - Debit increases):
 ## 📱 **12. PERFORMANCE TESTING**
 
 ### Load Testing
-- [ ] **Test 12.1:** Large Dataset
-  - [ ] Add 100+ inventory items
+- [ ] **Test 12.1:** Large Dataset (Company ID 1)
+  - [ ] Add 100+ inventory items for company ID 1
   - [ ] Verify POS loads quickly
   - [ ] Verify search works
   - [ ] Verify filtering works
+    - [ ] **POS Shop Type Filtering:**
+      - [ ] Change shop type to "Cafe" - verify items with "cafe" in category/name appear first
+      - [ ] Change shop type to "Retail" - verify retail items are prioritized
+      - [ ] **Change shop type to "Restaurant" - verify restaurant menu items appear first**
+        - [ ] Items with category containing "restaurant" should be prioritized
+        - [ ] Menu items (e.g., "Pizza", "Pasta", "Burger") should appear in quick selection
+        - [ ] Verify only items from the current company/restaurant are shown (companyId isolation)
+        - [ ] If multiple restaurants exist (different companyId), each should only see their own menu
+      - [ ] Change shop type to "General" - verify all items with stock are shown
+      - [ ] Verify filtered items count updates correctly (e.g., "12 available")
+    - [ ] **Stock Filtering:**
+      - [ ] Verify only items with stock > 0 appear in quick selection
+      - [ ] Set some items to stock = 0 - verify they disappear from POS
+      - [ ] Restore stock - verify items reappear
+    - [ ] **Barcode/SKU Search:**
+      - [ ] Enter a valid SKU in barcode input - verify item is found and added
+      - [ ] Enter partial SKU - verify search still works (fuzzy match)
+      - [ ] Enter invalid SKU - verify error message appears
+      - [ ] Test with barcode scanner (if available) - verify Enter key triggers search
+    - [ ] **Performance with Large Dataset:**
+      - [ ] With 100+ items, verify POS page loads in < 2 seconds
+      - [ ] Verify shop type filtering is instant (no lag)
+      - [ ] Verify barcode search responds quickly (< 500ms)
+      - [ ] Verify filtered items display updates smoothly when changing shop type
 
-- [ ] **Test 12.2:** Multiple Sales
-  - [ ] Make 50+ sales
-  - [ ] Verify Daily Sales Report loads
-  - [ ] Verify performance is acceptable
+- [x] **Test 12.2:** Multiple Sales
+  - [x] Make 50+ sales
+  - [x] Verify Daily Sales Report loads
+  - [x] Verify performance is acceptable
 
-- [ ] **Test 12.3:** Concurrent Users
-  - [ ] Test with 2-3 users simultaneously
-  - [ ] Make sales from different browsers
-  - [ ] Verify no data conflicts
-  - [ ] Verify all sales recorded
+- [x] **Test 12.3:** Concurrent Users
+  - [x] Test with 2-3 users simultaneously
+  - [x] Make sales from different browsers
+  - [x] Verify no data conflicts
+  - [x] Verify all sales recorded
 
 ---
 
 ## 🚨 **13. ERROR HANDLING TESTING**
 
 ### Error Scenarios
-- [ ] **Test 13.1:** Network Error
-  - [ ] Disconnect internet
-  - [ ] Try to make sale
-  - [ ] Verify error message shows
-  - [ ] Reconnect internet
-  - [ ] Verify system recovers
+- [x] **Test 13.1:** Network Error
+  - [x] Disconnect internet
+  - [x] Try to make sale
+  - [x] Verify error message shows
+  - [x] Reconnect internet
+  - [x] Verify system recovers
 
 - [ ] **Test 13.2:** Database Error
   - [ ] Stop database
@@ -610,11 +634,11 @@ Example for a Cash account (Asset - Debit increases):
   - [ ] Restart database
   - [ ] Verify system recovers
 
-- [ ] **Test 13.3:** Invalid Data
-  - [ ] Try to enter negative quantity
-  - [ ] Try to enter invalid date
-  - [ ] Try to enter text in number field
-  - [ ] Verify validation errors show
+- [x] **Test 13.3:** Invalid Data
+  - [x] Try to enter negative quantity
+  - [x] Try to enter invalid date
+  - [x] Try to enter text in number field
+  - [x] Verify validation errors show
 
 ---
 

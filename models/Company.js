@@ -45,6 +45,27 @@ const Company = sequelize.define('Company', {
   logo: {
     type: DataTypes.STRING(500),
     allowNull: true
+  },
+  enabledModules: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null,
+    get() {
+      const value = this.getDataValue('enabledModules');
+      if (!value) return null;
+      try {
+        return JSON.parse(value);
+      } catch (e) {
+        return null;
+      }
+    },
+    set(value) {
+      if (value === null || value === undefined) {
+        this.setDataValue('enabledModules', null);
+      } else {
+        this.setDataValue('enabledModules', JSON.stringify(value));
+      }
+    }
   }
 }, {
   tableName: 'companies',

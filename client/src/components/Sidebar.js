@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import useAuth from "../hooks/useAuth";
 import useCompany from "../hooks/useCompany";
-import { hasModuleAccess } from "../utils/rolePermissions";
+import { hasModuleAccess, hasModuleAccessWithCompany } from "../utils/rolePermissions";
 import { isDeveloper } from "../utils/developerCheck";
 
 // Base navigation items - available to all roles that have access
@@ -53,8 +53,11 @@ export default function Sidebar({ isArabic }) {
     ? t("navigation.developerPortal") 
     : (companyLoading ? t("appName") : (company?.name || t("appName")));
   
-  // Filter navigation items based on role permissions
-  const navItems = baseNavItems.filter(item => hasModuleAccess(role, item.module));
+  // Filter navigation items based on role permissions AND company module access
+  const enabledModules = company?.enabledModules;
+  const navItems = baseNavItems.filter(item => 
+    hasModuleAccessWithCompany(role, item.module, enabledModules)
+  );
 
   return (
     <aside
@@ -107,13 +110,13 @@ export default function Sidebar({ isArabic }) {
         ))}
         
         {/* HR & Payroll Section - visible to HR, Admin, and Accountant */}
-        {hasModuleAccess(role, "hr") && (
+        {hasModuleAccessWithCompany(role, "hr", enabledModules) && (
           <>
             <div className="my-2 border-t border-slate-200"></div>
             <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-500">
               {t("navigation.hrManagement")}
             </div>
-            {hrNavItems.filter(item => hasModuleAccess(role, item.module)).map((item) => (
+            {hrNavItems.filter(item => hasModuleAccessWithCompany(role, item.module, enabledModules)).map((item) => (
               <NavLink
                 key={item.key}
                 to={item.to}
@@ -132,7 +135,7 @@ export default function Sidebar({ isArabic }) {
         )}
         
         {/* Compliance & Financial Section - visible to Admin and Accountant */}
-        {hasModuleAccess(role, "kyc") && (
+        {hasModuleAccessWithCompany(role, "kyc", enabledModules) && (
           <>
             <div className="my-2 border-t border-slate-200"></div>
             <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-500">
@@ -154,13 +157,13 @@ export default function Sidebar({ isArabic }) {
         )}
         
         {/* VAT Section - visible to Admin and Accountant */}
-        {hasModuleAccess(role, "vat") && (
+        {hasModuleAccessWithCompany(role, "vat", enabledModules) && (
           <>
             <div className="my-2 border-t border-slate-200"></div>
             <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-500">
               {t("navigation.vat")}
             </div>
-            {vatNavItems.filter(item => hasModuleAccess(role, item.module)).map((item) => (
+            {vatNavItems.filter(item => hasModuleAccessWithCompany(role, item.module, enabledModules)).map((item) => (
               <NavLink
                 key={item.key}
                 to={item.to}
@@ -179,7 +182,7 @@ export default function Sidebar({ isArabic }) {
         )}
         
         {/* Reports Section - visible to Admin and Accountant (and Staff for daily sales) */}
-        {hasModuleAccess(role, "reports") && role !== "staff" && (
+        {hasModuleAccessWithCompany(role, "reports", enabledModules) && role !== "staff" && (
           <>
             <div className="my-2 border-t border-slate-200"></div>
             <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-500">
@@ -201,13 +204,13 @@ export default function Sidebar({ isArabic }) {
         )}
         
         {/* Accounting Section - visible to Admin and Accountant */}
-        {hasModuleAccess(role, "accounting") && (
+        {hasModuleAccessWithCompany(role, "accounting", enabledModules) && (
           <>
             <div className="my-2 border-t border-slate-200"></div>
             <div className="px-2 py-1 text-xs font-semibold uppercase text-slate-500">
               {t("navigation.accounting")}
             </div>
-            {accountingNavItems.filter(item => hasModuleAccess(role, item.module)).map((item) => (
+            {accountingNavItems.filter(item => hasModuleAccessWithCompany(role, item.module, enabledModules)).map((item) => (
               <NavLink
                 key={item.key}
                 to={item.to}

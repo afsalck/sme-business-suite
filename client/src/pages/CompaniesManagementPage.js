@@ -4,11 +4,12 @@ import useAuth from "../hooks/useAuth";
 import apiClient from "../services/apiClient";
 import LoadingState from "../components/LoadingState";
 import EmptyState from "../components/EmptyState";
+import { isDeveloper } from "../utils/developerCheck";
 import dayjs from "dayjs";
 
 export default function CompaniesManagementPage({ language }) {
   const { t } = useTranslation();
-  const { role } = useAuth();
+  const { role, user, loading: authLoading } = useAuth();
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,24 +26,59 @@ export default function CompaniesManagementPage({ language }) {
     trn: "",
     email: "",
     phone: "",
-    website: ""
+    website: "",
+    enabledModules: null // null = all modules, array = specific modules
   });
 
+  // Available modules for selection
+  const availableModules = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "invoices", label: "Invoices" },
+    { id: "inventory", label: "Inventory & Sales" },
+    { id: "pos", label: "Point of Sale (POS)" },
+    { id: "expenses", label: "Expenses" },
+    { id: "reports", label: "Reports" },
+    { id: "hr", label: "HR Management" },
+    { id: "payroll", label: "Payroll" },
+    { id: "accounting", label: "Accounting" },
+    { id: "vat", label: "VAT" },
+    { id: "kyc", label: "KYC/AML" }
+  ];
+
   useEffect(() => {
-    if (role === "admin") {
-      loadCompanies();
+    // Wait for auth to load, then check if user is developer (which requires admin role)
+    if (!authLoading && user) {
+      const isDev = isDeveloper(user);
+      if (isDev || role === "admin") {
+        loadCompanies();
+      } else {
+        // Not a developer or admin, but DeveloperRoute should have blocked this
+        setLoading(false);
+      }
     }
-  }, [role]);
+  }, [role, user, authLoading]);
 
   const loadCompanies = async () => {
     setLoading(true);
     setError(null);
     try {
+      console.log("[CompaniesManagement] Loading companies...");
       const { data } = await apiClient.get("/company/admin/all");
+      console.log("[CompaniesManagement] Companies loaded:", data);
       setCompanies(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("Error loading companies:", err);
-      setError(err?.response?.data?.message || "Failed to load companies");
+      console.error("=".repeat(60));
+      console.error("[CompaniesManagement] Error loading companies:");
+      console.error("Error:", err);
+      console.error("Response:", err?.response);
+      console.error("Status:", err?.response?.status);
+      console.error("Data:", err?.response?.data);
+      console.error("=".repeat(60));
+      
+      const errorMessage = err?.response?.data?.message 
+        || err?.message 
+        || "Failed to load companies";
+      setError(errorMessage);
       setCompanies([]);
     } finally {
       setLoading(false);
@@ -86,7 +122,8 @@ export default function CompaniesManagementPage({ language }) {
         trn: "",
         email: "",
         phone: "",
-        website: ""
+        website: "",
+        enabledModules: null
       });
       await loadCompanies();
       
@@ -132,7 +169,8 @@ export default function CompaniesManagementPage({ language }) {
       trn: company.trn || "",
       email: company.email || "",
       phone: company.phone || "",
-      website: company.website || ""
+      website: company.website || "",
+      enabledModules: company.enabledModules || null
     });
     setShowForm(true);
   };
@@ -202,7 +240,14 @@ export default function CompaniesManagementPage({ language }) {
     }
   };
 
-  if (role !== "admin") {
+  // Show loading while auth is being determined
+  if (authLoading) {
+    return <LoadingState />;
+  }
+
+  // Check if user is developer (DeveloperRoute should have already checked this, but double-check)
+  const isDev = isDeveloper(user);
+  if (!isDev && role !== "admin") {
     return (
       <div className="flex h-64 items-center justify-center">
         <EmptyState
@@ -379,6 +424,86 @@ export default function CompaniesManagementPage({ language }) {
               </div>
             </div>
 
+            {/* Module Configuration Section */}
+            <div className="border-t border-slate-200 pt-4">
+              <label className="block text-sm font-medium text-slate-700 mb-3">
+                {t("companies.enabledModules") || "Enabled Modules"}
+              </label>
+              <p className="text-xs text-slate-500 mb-3">
+                {t("companies.enabledModulesDescription") || 
+                  "Select which modules this company can access. Leave all unchecked to enable all modules (default)."}
+              </p>
+              
+              <div className="space-y-2">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="moduleAccess"
+                    checked={formData.enabledModules === null}
+                    onChange={() => setFormData({ ...formData, enabledModules: null })}
+                    className="text-primary focus:ring-primary"
+                  />
+                  <span className="text-sm text-slate-700">
+                    {t("companies.allModules") || "All Modules (Default)"}
+                  </span>
+                </label>
+                
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="moduleAccess"
+                    checked={formData.enabledModules !== null}
+                    onChange={() => setFormData({ ...formData, enabledModules: [] })}
+                    className="text-primary focus:ring-primary"
+                  />
+                  <span className="text-sm text-slate-700">
+                    {t("companies.customModules") || "Custom Selection"}
+                  </span>
+                </label>
+              </div>
+
+              {formData.enabledModules !== null && (
+                <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {availableModules.map((module) => (
+                    <label key={module.id} className="flex items-center gap-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Array.isArray(formData.enabledModules) && formData.enabledModules.includes(module.id)}
+                        onChange={(e) => {
+                          const currentModules = Array.isArray(formData.enabledModules) ? formData.enabledModules : [];
+                          if (e.target.checked) {
+                            setFormData({
+                              ...formData,
+                              enabledModules: [...currentModules, module.id]
+                            });
+                          } else {
+                            setFormData({
+                              ...formData,
+                              enabledModules: currentModules.filter(m => m !== module.id)
+                            });
+                          }
+                        }}
+                        className="text-primary focus:ring-primary rounded"
+                      />
+                      <span className="text-sm text-slate-700">{module.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {formData.enabledModules !== null && Array.isArray(formData.enabledModules) && formData.enabledModules.length > 0 && (
+                <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-xs text-blue-800">
+                    <strong>{t("companies.selectedModules") || "Selected:"}</strong>{" "}
+                    {formData.enabledModules.map(id => {
+                      const module = availableModules.find(m => m.id === id);
+                      return module ? module.label : id;
+                    }).join(", ")}
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
               <button
                 type="button"
@@ -432,6 +557,9 @@ export default function CompaniesManagementPage({ language }) {
                     {t("companies.email") || "Email"}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    {t("companies.enabledModules") || "Modules"}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
                     {t("companies.createdAt") || "Created"}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -462,6 +590,33 @@ export default function CompaniesManagementPage({ language }) {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                       {company.email || "-"}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600">
+                      {company.enabledModules === null || company.enabledModules === undefined ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          {t("companies.allModules") || "All Modules"}
+                        </span>
+                      ) : Array.isArray(company.enabledModules) && company.enabledModules.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {company.enabledModules.slice(0, 3).map((moduleId) => {
+                            const module = availableModules.find(m => m.id === moduleId);
+                            return (
+                              <span key={moduleId} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                {module ? module.label : moduleId}
+                              </span>
+                            );
+                          })}
+                          {company.enabledModules.length > 3 && (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                              +{company.enabledModules.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                          {t("companies.noModules") || "No Modules"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
                       {dayjs(company.createdAt).format("MMM DD, YYYY")}

@@ -6,10 +6,39 @@ const Sale = require("../models/Sale");
 const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 const Employee = require("../models/Employee");
+const Company = require("../models/Company");
 const { getVatSummary } = require("../server/services/vatService");
 const { setTenantContext } = require("../server/middleware/tenantMiddleware");
 
 const router = express.Router();
+
+// Helper to check if company has module enabled
+async function hasModuleEnabled(companyId, moduleName) {
+  try {
+    const company = await Company.findOne({
+      where: { companyId },
+      attributes: ['enabledModules']
+    });
+    
+    if (!company || !company.enabledModules) {
+      return true; // null = all modules enabled
+    }
+    
+    let enabledModules = company.enabledModules;
+    if (typeof enabledModules === 'string') {
+      try {
+        enabledModules = JSON.parse(enabledModules);
+      } catch (e) {
+        return true; // Parse error = allow access
+      }
+    }
+    
+    return Array.isArray(enabledModules) && enabledModules.includes(moduleName);
+  } catch (error) {
+    console.error('[Dashboard] Error checking module access:', error);
+    return true; // On error, allow access
+  }
+}
 
 // Note: Authentication is handled globally by verifyFirebaseToken middleware in server/index.js
 
@@ -35,6 +64,16 @@ router.get("/metrics", setTenantContext, async (req, res) => {
   });
   
   const { from, to } = req.query;
+  
+  // Check which modules are enabled for this company
+  const companyId = req.companyId || 1;
+  const hasExpenses = await hasModuleEnabled(companyId, 'expenses');
+  const hasInvoices = await hasModuleEnabled(companyId, 'invoices');
+  const hasHr = await hasModuleEnabled(companyId, 'hr');
+  const hasVat = await hasModuleEnabled(companyId, 'vat');
+  const hasInventory = await hasModuleEnabled(companyId, 'inventory');
+  
+  console.log(`   [DASHBOARD] Module access - Expenses: ${hasExpenses}, Invoices: ${hasInvoices}, HR: ${hasHr}, VAT: ${hasVat}, Inventory: ${hasInventory}`);
 
   const startDate = from ? dayjs(from).startOf("day").toDate() : null;
   const endDate = to ? dayjs(to).endOf("day").toDate() : null;
@@ -82,40 +121,41 @@ router.get("/metrics", setTenantContext, async (req, res) => {
     });
 
     // Use Promise.allSettled so one failure doesn't break everything
+    // Only query data for enabled modules
     const [salesResult, expenseResult, invoiceResult, expiringResult, todaySalesResult, todayExpenseResult, invoiceStatsResult, vatSummaryResult] = await Promise.allSettled([
-      // Total sales and VAT
-      Sale.findAll({
+      // Total sales and VAT (always available if inventory/pos enabled)
+      hasInventory ? Sale.findAll({
         where: saleWhere,
         attributes: [
           [sequelize.fn('SUM', sequelize.col('totalSales')), 'totalSales'],
           [sequelize.fn('SUM', sequelize.col('totalVAT')), 'totalVAT']
         ],
         raw: true
-      }).catch(() => [{ totalSales: 0, totalVAT: 0 }]),
+      }).catch(() => [{ totalSales: 0, totalVAT: 0 }]) : Promise.resolve([{ totalSales: 0, totalVAT: 0 }]),
       
-      // Total expenses
-      Expense.findAll({
+      // Total expenses (only if expenses module enabled)
+      hasExpenses ? Expense.findAll({
         where: expenseWhere,
         attributes: [
           [sequelize.fn('SUM', sequelize.col('amount')), 'totalExpenses']
         ],
         raw: true
-      }).catch(() => [{ totalExpenses: 0 }]),
+      }).catch(() => [{ totalExpenses: 0 }]) : Promise.resolve([{ totalExpenses: 0 }]),
       
-      // Total invoice VAT and amount
-      Invoice.findAll({
+      // Total invoice VAT and amount (only if invoices module enabled)
+      hasInvoices ? Invoice.findAll({
         where: invoiceWhere,
         attributes: [
           [sequelize.fn('SUM', sequelize.col('vatAmount')), 'totalVat'],
           [sequelize.fn('SUM', sequelize.col('total')), 'totalInvoiceAmount']
         ],
         raw: true
-      }).catch(() => [{ totalVat: 0, totalInvoiceAmount: 0 }]),
+      }).catch(() => [{ totalVat: 0, totalInvoiceAmount: 0 }]) : Promise.resolve([{ totalVat: 0, totalInvoiceAmount: 0 }]),
       
-      // Expiring employees (visa or passport expiring in 30 days)
-      Employee.count({
+      // Expiring employees (only if HR module enabled)
+      hasHr ? Employee.count({
         where: {
-          companyId: req.companyId, // ✅ Filter by companyId
+          companyId: req.companyId,
           [Op.or]: [
             {
               visaExpiry: {
@@ -129,28 +169,28 @@ router.get("/metrics", setTenantContext, async (req, res) => {
             }
           ]
         }
-      }).catch(() => 0),
+      }).catch(() => 0) : Promise.resolve(0),
       
-      // Today's sales
-      Sale.findAll({
+      // Today's sales (always available if inventory/pos enabled)
+      hasInventory ? Sale.findAll({
         where: todaySaleWhere,
         attributes: [
           [sequelize.fn('SUM', sequelize.col('totalSales')), 'dailySales']
         ],
         raw: true
-      }).catch(() => [{ dailySales: 0 }]),
+      }).catch(() => [{ dailySales: 0 }]) : Promise.resolve([{ dailySales: 0 }]),
       
-      // Today's expenses
-      Expense.findAll({
+      // Today's expenses (only if expenses module enabled)
+      hasExpenses ? Expense.findAll({
         where: todayExpenseWhere,
         attributes: [
           [sequelize.fn('SUM', sequelize.col('amount')), 'dailyExpenses']
         ],
         raw: true
-      }).catch(() => [{ dailyExpenses: 0 }]),
+      }).catch(() => [{ dailyExpenses: 0 }]) : Promise.resolve([{ dailyExpenses: 0 }]),
       
-      // Invoice statistics - use separate counts for better SQL Server compatibility
-      Promise.all([
+      // Invoice statistics (only if invoices module enabled)
+      hasInvoices ? Promise.all([
         Invoice.count({ where: { companyId: req.companyId } }).catch(() => 0),
         Invoice.count({ where: { companyId: req.companyId, status: 'paid' } }).catch(() => 0),
         Invoice.count({ where: { companyId: req.companyId, status: 'overdue' } }).catch(() => 0)
@@ -158,9 +198,10 @@ router.get("/metrics", setTenantContext, async (req, res) => {
         totalInvoices: total,
         paidInvoices: paid,
         overdueInvoices: overdue
-      })).catch(() => ({ totalInvoices: 0, paidInvoices: 0, overdueInvoices: 0 })),
+      })).catch(() => ({ totalInvoices: 0, paidInvoices: 0, overdueInvoices: 0 })) : Promise.resolve({ totalInvoices: 0, paidInvoices: 0, overdueInvoices: 0 }),
       
-      getVatSummary({ from, to, companyId: req.companyId }).catch(() => null)
+      // VAT summary (only if VAT module enabled)
+      hasVat ? getVatSummary({ from, to, companyId: req.companyId }).catch(() => null) : Promise.resolve(null)
     ]);
 
     // Extract values from Promise.allSettled results
@@ -189,8 +230,9 @@ router.get("/metrics", setTenantContext, async (req, res) => {
     const overdueInvoices = parseInt(invoiceStats.overdueInvoices || 0, 10);
 
     // Get trend data - use CONVERT for SQL Server date formatting
+    // Only query data for enabled modules
     const [salesTrendResult, expenseTrendResult] = await Promise.allSettled([
-      Sale.findAll({
+      hasInventory ? Sale.findAll({
         where: saleWhere,
         attributes: [
           [sequelize.literal("CONVERT(VARCHAR(10), date, 120)"), 'date'],
@@ -199,9 +241,9 @@ router.get("/metrics", setTenantContext, async (req, res) => {
         group: [sequelize.literal("CONVERT(VARCHAR(10), date, 120)")],
         order: [[sequelize.literal("CONVERT(VARCHAR(10), date, 120)"), 'ASC']],
         raw: true
-      }).catch(() => []),
+      }).catch(() => []) : Promise.resolve([]),
       
-      Expense.findAll({
+      hasExpenses ? Expense.findAll({
         where: expenseWhere,
         attributes: [
           [sequelize.literal("CONVERT(VARCHAR(10), date, 120)"), 'date'],
@@ -210,7 +252,7 @@ router.get("/metrics", setTenantContext, async (req, res) => {
         group: [sequelize.literal("CONVERT(VARCHAR(10), date, 120)")],
         order: [[sequelize.literal("CONVERT(VARCHAR(10), date, 120)"), 'ASC']],
         raw: true
-      }).catch(() => [])
+      }).catch(() => []) : Promise.resolve([])
     ]);
 
     // Format trend data to match expected format

@@ -32,7 +32,9 @@ export function isDeveloper(user) {
   // Option 2: Check by specific email addresses
   const developerEmails = [
     'developer@bizease.ae',
-    'admin@bizease.ae' // Add your developer emails here
+    'admin@bizease.ae'
+    // Add your developer email here, e.g.:
+    // 'your-email@example.com'
   ];
   
   if (developerEmails.includes(user.email.toLowerCase())) {

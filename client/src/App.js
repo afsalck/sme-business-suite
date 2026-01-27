@@ -8,6 +8,7 @@ import Sidebar from "./components/Sidebar";
 import Topbar from "./components/Topbar";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DeveloperRoute from "./components/DeveloperRoute";
+import ModuleAccessRoute from "./components/ModuleAccessRoute";
 import LoadingState from "./components/LoadingState";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -81,12 +82,32 @@ export default function App() {
             >
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage language={language} />} />
-              <Route path="/invoices" element={<InvoicesPage language={language} />} />
+              <Route path="/invoices" element={
+                <ModuleAccessRoute module="invoices">
+                  <InvoicesPage language={language} />
+                </ModuleAccessRoute>
+              } />
               <Route path="/employees" element={<Navigate to="/hr" replace />} />
-              <Route path="/hr" element={<HRPage language={language} />} />
-              <Route path="/inventory" element={<InventoryPage language={language} />} />
-              <Route path="/expenses" element={<ExpensesPage language={language} />} />
-              <Route path="/reports/daily-sales" element={<DailySalesReportPage language={language} />} />
+              <Route path="/hr" element={
+                <ModuleAccessRoute module="hr">
+                  <HRPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/inventory" element={
+                <ModuleAccessRoute module="inventory">
+                  <InventoryPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/expenses" element={
+                <ModuleAccessRoute module="expenses">
+                  <ExpensesPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/reports/daily-sales" element={
+                <ModuleAccessRoute module="reports">
+                  <DailySalesReportPage language={language} />
+                </ModuleAccessRoute>
+              } />
               {/* Developer-only routes - protected by DeveloperRoute */}
               {/* IMPORTANT: More specific routes must come BEFORE less specific ones */}
               <Route 
@@ -106,19 +127,71 @@ export default function App() {
                 } 
               />
               <Route path="/notifications" element={<NotificationsPage language={language} />} />
-              <Route path="/vat/settings" element={<VatSettingsPage language={language} />} />
-              <Route path="/vat/dashboard" element={<VatDashboardPage language={language} />} />
-              <Route path="/vat/report" element={<VatReportPage language={language} />} />
-              <Route path="/vat/filing" element={<VatFilingPage language={language} />} />
-              <Route path="/accounting/chart-of-accounts" element={<ChartOfAccountsPage language={language} />} />
-              <Route path="/accounting/journal-entries" element={<JournalEntriesPage language={language} />} />
-              <Route path="/accounting/general-ledger" element={<GeneralLedgerPage language={language} />} />
-              <Route path="/accounting/financial-statements" element={<FinancialStatementsPage language={language} />} />
-              <Route path="/payments" element={<PaymentsPage language={language} />} />
-              <Route path="/payroll/periods" element={<PayrollPeriodsPage language={language} />} />
-              <Route path="/payroll/records" element={<PayrollRecordsPage language={language} />} />
-              <Route path="/kyc/clients" element={<KycClientsPage language={language} />} />
-              <Route path="/reports" element={<ReportsPage language={language} />} />
+              <Route path="/vat/settings" element={
+                <ModuleAccessRoute module="vat">
+                  <VatSettingsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/vat/dashboard" element={
+                <ModuleAccessRoute module="vat">
+                  <VatDashboardPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/vat/report" element={
+                <ModuleAccessRoute module="vat">
+                  <VatReportPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/vat/filing" element={
+                <ModuleAccessRoute module="vat">
+                  <VatFilingPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/accounting/chart-of-accounts" element={
+                <ModuleAccessRoute module="accounting">
+                  <ChartOfAccountsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/accounting/journal-entries" element={
+                <ModuleAccessRoute module="accounting">
+                  <JournalEntriesPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/accounting/general-ledger" element={
+                <ModuleAccessRoute module="accounting">
+                  <GeneralLedgerPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/accounting/financial-statements" element={
+                <ModuleAccessRoute module="accounting">
+                  <FinancialStatementsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/payments" element={
+                <ModuleAccessRoute module="accounting">
+                  <PaymentsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/payroll/periods" element={
+                <ModuleAccessRoute module="payroll">
+                  <PayrollPeriodsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/payroll/records" element={
+                <ModuleAccessRoute module="payroll">
+                  <PayrollRecordsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/kyc/clients" element={
+                <ModuleAccessRoute module="kyc">
+                  <KycClientsPage language={language} />
+                </ModuleAccessRoute>
+              } />
+              <Route path="/reports" element={
+                <ModuleAccessRoute module="reports">
+                  <ReportsPage language={language} />
+                </ModuleAccessRoute>
+              } />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

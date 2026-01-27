@@ -107,6 +107,28 @@ export function hasModuleAccess(role, module) {
 }
 
 /**
+ * Check if a role has access to a module AND if the company has the module enabled
+ * @param {string} role - User role
+ * @param {string} module - Module name
+ * @param {Array<string>|null} enabledModules - Array of enabled modules for the company (null = all enabled)
+ * @returns {boolean} - True if both role and company allow access
+ */
+export function hasModuleAccessWithCompany(role, module, enabledModules) {
+  // First check role permissions
+  if (!hasModuleAccess(role, module)) {
+    return false;
+  }
+  
+  // If company has no module restrictions (null), allow all modules
+  if (enabledModules === null || enabledModules === undefined) {
+    return true;
+  }
+  
+  // If company has module restrictions, check if this module is enabled
+  return Array.isArray(enabledModules) && enabledModules.includes(module);
+}
+
+/**
  * Get all accessible modules for a role
  */
 export function getAccessibleModules(role) {

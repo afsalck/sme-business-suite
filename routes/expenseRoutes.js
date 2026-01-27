@@ -4,10 +4,11 @@ const { Op } = require("sequelize");
 const Expense = require("../models/Expense");
 const { authorizeRole } = require("../server/middleware/authMiddleware");
 const { setTenantContext } = require("../server/middleware/tenantMiddleware");
+const { moduleAccessCheck } = require("../server/middleware/moduleAccessMiddleware");
 
 const router = express.Router();
 
-router.get("/", authorizeRole("admin", "accountant"), setTenantContext, async (req, res) => {
+router.get("/", authorizeRole("admin", "accountant"), setTenantContext, moduleAccessCheck("expenses"), async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();

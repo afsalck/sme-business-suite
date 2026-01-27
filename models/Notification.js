@@ -14,15 +14,11 @@ const Notification = sequelize.define('Notification', {
     comment: 'Firebase UID of the user'
   },
   type: {
-    type: DataTypes.ENUM(
-      'passport_expiry',
-      'visa_expiry',
-      'contract_expiry',
-      'license_expiry',
-      'vat_due',
-      'invoice_due'
-    ),
-    allowNull: false
+    type: DataTypes.STRING(50), // SQL Server doesn't support ENUM, use STRING with CHECK constraint
+    allowNull: false,
+    validate: {
+      isIn: [['passport_expiry', 'visa_expiry', 'contract_expiry', 'license_expiry', 'vat_due', 'invoice_due']]
+    }
   },
   title: {
     type: DataTypes.STRING,
@@ -41,8 +37,11 @@ const Notification = sequelize.define('Notification', {
     allowNull: true
   },
   status: {
-    type: DataTypes.ENUM('unread', 'read'),
-    defaultValue: 'unread'
+    type: DataTypes.STRING(20), // SQL Server doesn't support ENUM, use STRING with CHECK constraint
+    defaultValue: 'unread',
+    validate: {
+      isIn: [['unread', 'read']]
+    }
   },
   notificationKey: {
     type: DataTypes.STRING,
@@ -50,9 +49,16 @@ const Notification = sequelize.define('Notification', {
     unique: true,
     field: 'notificationKey',
     comment: 'Unique key to prevent duplicate notifications'
+  },
+  companyId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+    comment: 'Company/tenant ID for multi-tenancy'
   }
 }, {
   tableName: 'notifications',
+  schema: 'dbo', // Explicitly specify schema for SQL Server
   timestamps: true,
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
@@ -69,6 +75,9 @@ const Notification = sequelize.define('Notification', {
     {
       fields: ['notificationKey'],
       unique: true
+    },
+    {
+      fields: ['companyId']
     }
   ]
 });

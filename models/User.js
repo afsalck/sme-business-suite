@@ -21,8 +21,12 @@ const User = sequelize.define('User', {
     allowNull: true
   },
   role: {
-    type: DataTypes.ENUM('admin', 'staff'),
-    defaultValue: 'staff'
+    type: DataTypes.STRING(20),
+    allowNull: false,
+    defaultValue: 'staff',
+    validate: {
+      isIn: [['admin', 'staff', 'hr', 'accountant']]
+    }
   },
   phoneNumber: {
     type: DataTypes.STRING,
@@ -31,6 +35,12 @@ const User = sequelize.define('User', {
   lastLoginAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  companyId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+    comment: 'Company/tenant ID for multi-tenancy'
   }
 }, {
   tableName: 'users',

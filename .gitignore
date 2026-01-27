@@ -45,3 +45,8 @@ uploads/*.pdf
 uploads/*.jpg
 uploads/*.png
 
+# Test data generation scripts (not needed in production)
+scripts/generate-*.js
+scripts/test-*.js
+scripts/VALIDATION_TEST_RESULTS.md
+

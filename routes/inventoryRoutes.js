@@ -11,8 +11,11 @@ const { sequelize } = require("../server/config/database");
 const { Op } = require("sequelize");
 const InventoryItem = require("../models/InventoryItem");
 const Sale = require("../models/Sale");
+const Company = require("../models/Company");
 const { calculateInvoiceTotals } = require("../server/utils/invoiceUtils");
 const { authorizeRole } = require("../server/middleware/authMiddleware");
+const { setTenantContext } = require("../server/middleware/tenantMiddleware");
+const { generateReceiptPdf } = require("../server/services/pdfService");
 
 const router = express.Router();
 
@@ -38,7 +41,44 @@ router.get("/test", (req, res) => {
   });
 });
 
-router.get("/", async (req, res) => {
+// Search inventory by SKU/barcode
+router.get("/search", setTenantContext, async (req, res) => {
+  try {
+    await sequelize.authenticate();
+  } catch (dbError) {
+    return res.status(503).json({ message: "Database connection unavailable" });
+  }
+
+  try {
+    const { sku, barcode } = req.query;
+    const searchTerm = sku || barcode;
+    
+    if (!searchTerm) {
+      return res.status(400).json({ message: "SKU or barcode is required" });
+    }
+
+    const item = await InventoryItem.findOne({
+      where: {
+        companyId: req.companyId, // ✅ Filter by companyId
+        [Op.or]: [
+          { sku: searchTerm },
+          { sku: { [Op.like]: `%${searchTerm}%` } }
+        ]
+      }
+    });
+
+    if (!item) {
+      return res.status(404).json({ message: "Item not found" });
+    }
+
+    res.json(item.get({ plain: true }));
+  } catch (error) {
+    console.error("[Inventory] Search error:", error);
+    res.status(500).json({ message: "Failed to search inventory" });
+  }
+});
+
+router.get("/", setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -49,6 +89,9 @@ router.get("/", async (req, res) => {
 
   try {
     const items = await InventoryItem.findAll({
+      where: {
+        companyId: req.companyId // ✅ Filter by companyId
+      },
       order: [['name', 'ASC']],
       raw: false
     });
@@ -62,7 +105,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", authorizeRole("admin"), async (req, res) => {
+router.post("/", authorizeRole("admin"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -73,10 +116,33 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
   try {
     const item = await InventoryItem.create({
       ...req.body,
+      companyId: req.companyId, // ✅ Set companyId
       createdByUid: req.user.uid,
       createdByDisplayName: req.user.displayName,
       createdByEmail: req.user.email
     });
+
+    // Auto-create journal entry if initial stock > 0
+    if (item.stock > 0 && item.costPrice > 0) {
+      try {
+        const { createJournalEntryFromInventory, postJournalEntry } = require("../server/services/accountingService");
+        const companyId = 1; // TODO: Get from user context
+        
+        console.log("[Inventory] Creating journal entry for initial inventory:", item.name, "Stock:", item.stock);
+        const journalEntry = await createJournalEntryFromInventory(item.get({ plain: true }), 0, item.stock, companyId);
+        
+        if (journalEntry) {
+          console.log("[Inventory] ✓ Journal entry created:", journalEntry.entryNumber || journalEntry.id);
+          // Auto-post the journal entry
+          await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+          console.log("[Inventory] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+        }
+      } catch (accountingError) {
+        console.error("[Inventory] Accounting integration failed (non-critical):", accountingError.message);
+        // Don't fail the inventory creation if accounting fails
+      }
+    }
+
     res.status(201).json(item.get({ plain: true }));
   } catch (error) {
     console.error("[Inventory] Create error:", error);
@@ -84,7 +150,7 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
   }
 });
 
-router.put("/:id", authorizeRole("admin"), async (req, res) => {
+router.put("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -93,21 +159,61 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
   }
 
   try {
-    const item = await InventoryItem.findByPk(req.params.id);
+    const item = await InventoryItem.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
     
     if (!item) {
       return res.status(404).json({ message: "Inventory item not found" });
     }
     
+    // Track old stock before update
+    const oldStock = item.stock;
+    const oldCostPrice = item.costPrice;
+    
     await item.update(req.body);
-    res.json(item.get({ plain: true }));
+    const updatedItem = await InventoryItem.findByPk(req.params.id);
+    
+    // Auto-create journal entry if stock or cost price changed
+    const newStock = updatedItem.stock;
+    const newCostPrice = updatedItem.costPrice;
+    const stockChanged = oldStock !== newStock;
+    const costChanged = oldCostPrice !== newCostPrice;
+    
+    if ((stockChanged || costChanged) && newStock > 0 && newCostPrice > 0) {
+      try {
+        const { createJournalEntryFromInventory, postJournalEntry } = require("../server/services/accountingService");
+        const companyId = 1; // TODO: Get from user context
+        
+        console.log("[Inventory] Stock/Cost changed - creating journal entry:", updatedItem.name);
+        console.log("[Inventory] Old stock:", oldStock, "New stock:", newStock);
+        console.log("[Inventory] Old cost:", oldCostPrice, "New cost:", newCostPrice);
+        
+        const journalEntry = await createJournalEntryFromInventory(updatedItem.get({ plain: true }), oldStock, newStock, companyId);
+        
+        if (journalEntry) {
+          console.log("[Inventory] ✓ Journal entry created:", journalEntry.entryNumber || journalEntry.id);
+          // Auto-post the journal entry
+          await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+          console.log("[Inventory] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+        }
+      } catch (accountingError) {
+        console.error("[Inventory] Accounting integration failed (non-critical):", accountingError.message);
+        // Don't fail the inventory update if accounting fails
+      }
+    }
+    
+    res.json(updatedItem.get({ plain: true }));
   } catch (error) {
     console.error("[Inventory] Update error:", error);
     res.status(500).json({ message: "Failed to update inventory item" });
   }
 });
 
-router.delete("/:id", authorizeRole("admin"), async (req, res) => {
+router.delete("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -116,7 +222,12 @@ router.delete("/:id", authorizeRole("admin"), async (req, res) => {
   }
 
   try {
-    const item = await InventoryItem.findByPk(req.params.id);
+    const item = await InventoryItem.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
     
     if (!item) {
       return res.status(404).json({ message: "Inventory item not found" });
@@ -132,7 +243,7 @@ router.delete("/:id", authorizeRole("admin"), async (req, res) => {
 
 // Daily sales report endpoints (must be defined BEFORE /sales route)
 // Excel export endpoint for daily sales report
-router.get("/sales/daily-report/excel", (req, res, next) => {
+router.get("/sales/daily-report/excel", setTenantContext, (req, res, next) => {
   console.log("=".repeat(60));
   console.log("📊 [EXCEL EXPORT] ROUTE HANDLER CALLED!");
   console.log("   Method:", req.method);
@@ -178,14 +289,23 @@ router.get("/sales/daily-report/excel", (req, res, next) => {
     console.log("[Sales Report Excel] Fetching sales from database...");
     const sales = await Sale.findAll({
       where: {
+        companyId: req.companyId, // ✅ Filter by companyId
         date: {
           [Op.between]: [startDate, endDate]
         }
       },
       order: [['date', 'DESC']],
-      raw: false
+      raw: false // Important: raw: false to get model instances with getters
     });
     console.log(`[Sales Report Excel] ✅ Found ${sales.length} sales records`);
+    
+    // Debug: Check first sale's items structure
+    if (sales.length > 0) {
+      const firstSale = sales[0];
+      console.log(`[Sales Report Excel] DEBUG - First sale ID: ${firstSale.id}`);
+      console.log(`[Sales Report Excel] DEBUG - First sale items via getter:`, typeof firstSale.items, Array.isArray(firstSale.items) ? firstSale.items.length : 'not array');
+      console.log(`[Sales Report Excel] DEBUG - First sale raw items:`, typeof firstSale.getDataValue('items'), firstSale.getDataValue('items')?.substring?.(0, 100) || firstSale.getDataValue('items'));
+    }
 
     // Group sales by day (same logic as daily-report endpoint)
     console.log("[Sales Report Excel] Grouping sales by day...");
@@ -264,42 +384,138 @@ router.get("/sales/daily-report/excel", (req, res, next) => {
 
     // Detailed transactions sheet
     const detailData = [
-      ["Date", "Time", "Summary", "Items", "Quantity", "Unit Price", "VAT", "Total"]
+      ["Date", "Time", "Sale ID", "Summary", "Item Name", "SKU", "Quantity", "Unit Price (AED)", "Line Total (AED)", "VAT (AED)"]
     ];
 
     sales.forEach(sale => {
-      const saleData = sale.get({ plain: true });
-      const saleDate = dayjs(saleData.date);
+      const saleDate = dayjs(sale.date);
+      const saleId = sale.id;
+      const saleSummary = sale.summary || `Sale #${saleId}`;
       
-      if (Array.isArray(saleData.items) && saleData.items.length > 0) {
-        saleData.items.forEach((item, idx) => {
-          detailData.push([
+      // Get items - use model instance directly to trigger getter
+      let items = null;
+      
+      try {
+        // Access items property directly from model instance (triggers getter)
+        items = sale.items;
+        
+        // If getter didn't work, try getting raw value and parsing
+        if (!Array.isArray(items)) {
+          const rawItems = sale.getDataValue('items');
+          console.log(`[Sales Report Excel] Sale ${saleId} - raw items type: ${typeof rawItems}, length: ${rawItems?.length || 'N/A'}`);
+          
+          if (typeof rawItems === 'string') {
+            try {
+              items = JSON.parse(rawItems);
+              console.log(`[Sales Report Excel] Sale ${saleId} - parsed ${items?.length || 0} items from JSON string`);
+            } catch (parseError) {
+              console.error(`[Sales Report Excel] Sale ${saleId} - JSON parse error:`, parseError.message);
+              console.error(`[Sales Report Excel] Sale ${saleId} - Raw string (first 200 chars):`, rawItems?.substring(0, 200));
+              items = [];
+            }
+          } else if (Array.isArray(rawItems)) {
+            items = rawItems;
+            console.log(`[Sales Report Excel] Sale ${saleId} - got ${items.length} items from raw array`);
+          } else {
+            console.warn(`[Sales Report Excel] Sale ${saleId} - raw items is not string or array:`, typeof rawItems);
+            items = [];
+          }
+        } else {
+          console.log(`[Sales Report Excel] Sale ${saleId} - got ${items.length} items from model getter`);
+        }
+      } catch (error) {
+        console.error(`[Sales Report Excel] Sale ${saleId} - error getting items:`, error.message);
+        items = [];
+      }
+      
+      // Ensure items is an array
+      if (!Array.isArray(items)) {
+        console.warn(`[Sales Report Excel] Sale ${saleId} - items is not an array. Type: ${typeof items}`);
+        items = [];
+      }
+      
+      console.log(`[Sales Report Excel] Sale ${saleId} - Final items count: ${items.length}`);
+      
+      if (items.length > 0) {
+        // Add each item as a separate row
+        items.forEach((item, idx) => {
+          const itemName = item.name || "Unknown Item";
+          // SKU might not be in sale items, use item ID if SKU not available
+          const itemSku = item.sku || (item.item ? `ID:${item.item}` : "") || "";
+          const quantity = item.quantity || 0;
+          const unitPrice = parseFloat(item.unitPrice || 0);
+          const lineTotal = parseFloat(item.lineTotal || (unitPrice * quantity));
+          const vatAmount = parseFloat(item.vatAmount || 0);
+          
+          console.log(`[Sales Report Excel] Sale ${saleId} - Item ${idx + 1}: ${itemName}, Qty: ${quantity}, Price: ${unitPrice}, SKU: ${itemSku}`);
+          
+          const row = [
             saleDate.format("YYYY-MM-DD"),
-            saleDate.format("HH:mm"),
-            idx === 0 ? (saleData.summary || `Sale #${saleData.id}`) : "",
-            item.name || "",
-            item.quantity || 0,
-            parseFloat(item.unitPrice || 0).toFixed(2),
-            parseFloat(item.vatAmount || 0).toFixed(2),
-            parseFloat(item.lineTotal || 0).toFixed(2)
-          ]);
+            saleDate.format("HH:mm:ss"),
+            saleId || "",
+            idx === 0 ? saleSummary : "", // Show summary only on first item row
+            itemName,
+            itemSku,
+            quantity,
+            unitPrice.toFixed(2),
+            lineTotal.toFixed(2),
+            vatAmount.toFixed(2)
+          ];
+          
+          console.log(`[Sales Report Excel] Sale ${saleId} - Row data:`, row);
+          detailData.push(row);
         });
       } else {
-        // If no items, still show the sale
+        // If no items, still show the sale with totals
+        console.warn(`[Sales Report Excel] Sale ${saleId} - No items found, showing totals only`);
         detailData.push([
           saleDate.format("YYYY-MM-DD"),
-          saleDate.format("HH:mm"),
-          saleData.summary || `Sale #${saleData.id}`,
+          saleDate.format("HH:mm:ss"),
+          saleId || "",
+          saleSummary,
+          "No items found",
           "",
           "",
           "",
-          parseFloat(saleData.totalVAT || 0).toFixed(2),
-          parseFloat(saleData.totalSales || 0).toFixed(2)
+          parseFloat(sale.totalSales || 0).toFixed(2),
+          parseFloat(sale.totalVAT || 0).toFixed(2)
         ]);
       }
     });
-
+    
+    // Add totals row at the end of detail sheet
+    if (detailData.length > 1) { // More than just header
+      const totals = sales.reduce((acc, sale) => {
+        const saleData = sale.get({ plain: true });
+        acc.totalSales += parseFloat(saleData.totalSales || 0);
+        acc.totalVAT += parseFloat(saleData.totalVAT || 0);
+        return acc;
+      }, { totalSales: 0, totalVAT: 0 });
+      
+      detailData.push([]); // Empty row
+      detailData.push([
+        "TOTAL",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        totals.totalSales.toFixed(2),
+        totals.totalVAT.toFixed(2)
+      ]);
+    }
+    
+    console.log(`[Sales Report Excel] Detail sheet will have ${detailData.length} rows (including header)`);
+    console.log(`[Sales Report Excel] First few rows of detailData:`, detailData.slice(0, 5));
+    
     const detailSheet = XLSX.utils.aoa_to_sheet(detailData);
+    
+    // Log the sheet range to verify data was written
+    console.log(`[Sales Report Excel] Detail sheet range:`, detailSheet['!ref']);
+    console.log(`[Sales Report Excel] Detail sheet has ${Object.keys(detailSheet).filter(k => !k.startsWith('!')).length} cells`);
+    
     XLSX.utils.book_append_sheet(workbook, detailSheet, "Transaction Details");
 
     // Generate Excel file buffer
@@ -328,7 +544,7 @@ router.get("/sales/daily-report/excel", (req, res, next) => {
 });
 
 // Daily sales report endpoint
-router.get("/sales/daily-report", async (req, res) => {
+router.get("/sales/daily-report", setTenantContext, async (req, res) => {
   console.log("=".repeat(60));
   console.log("📊 [DAILY SALES REPORT] GET /sales/daily-report");
   console.log("   Query params:", req.query);
@@ -353,6 +569,7 @@ router.get("/sales/daily-report", async (req, res) => {
     // Get all sales in the date range
     const sales = await Sale.findAll({
       where: {
+        companyId: req.companyId, // ✅ Filter by companyId
         date: {
           [Op.between]: [startDate, endDate]
         }
@@ -420,7 +637,7 @@ router.get("/sales/daily-report", async (req, res) => {
   }
 });
 
-router.get("/sales", async (req, res) => {
+router.get("/sales", setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -430,7 +647,9 @@ router.get("/sales", async (req, res) => {
   }
 
   const { from, to } = req.query;
-  const where = {};
+  const where = {
+    companyId: req.companyId // ✅ Filter by companyId
+  };
 
   if (from || to) {
     where.date = {};
@@ -454,7 +673,114 @@ router.get("/sales", async (req, res) => {
   }
 });
 
-router.delete("/sales/:id", authorizeRole("admin"), async (req, res) => {
+/**
+ * GET /api/inventory/sales/:id/pdf
+ * Generate and download receipt PDF
+ */
+router.get("/sales/:id/pdf", setTenantContext, async (req, res) => {
+  try {
+    await sequelize.authenticate();
+  } catch (dbError) {
+    return res.status(503).json({ message: "Database not available" });
+  }
+
+  try {
+    const sale = await Sale.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
+
+    if (!sale) {
+      return res.status(404).json({ message: "Sale not found" });
+    }
+
+    const saleData = sale.get({ plain: true });
+    
+    // Parse items JSON if needed
+    if (saleData.items && typeof saleData.items === 'string') {
+      try {
+        saleData.items = JSON.parse(saleData.items);
+      } catch (e) {
+        console.warn("[Receipt PDF] Could not parse items JSON:", e);
+        saleData.items = [];
+      }
+    }
+    
+    // Ensure items is an array
+    if (!Array.isArray(saleData.items)) {
+      saleData.items = [];
+    }
+    
+    // Normalize numeric fields
+    saleData.totalSales = parseFloat(saleData.totalSales || saleData.subtotal || 0);
+    saleData.totalVAT = parseFloat(saleData.totalVAT || saleData.vatAmount || 0);
+    saleData.grandTotal = parseFloat(saleData.grandTotal || saleData.total || (saleData.totalSales + saleData.totalVAT));
+    
+    // Normalize item numeric fields
+    saleData.items = saleData.items.map(item => ({
+      ...item,
+      quantity: parseFloat(item.quantity || 1),
+      unitPrice: parseFloat(item.unitPrice || item.item?.salePrice || 0),
+      total: parseFloat(item.total || item.lineTotal || (item.quantity * (item.unitPrice || 0)))
+    }));
+    
+    // Get language from query parameter, default to 'en'
+    const language = req.query.lang || 'en';
+    
+    // Get company information from database
+    let companyInfo = null;
+    try {
+      const company = await Company.findOne({ where: { companyId: 1 } });
+      if (company) {
+        const companyData = company.get({ plain: true });
+        companyInfo = {
+          // For receipts, prioritize shopName if available, otherwise use name
+          name: companyData.shopName || companyData.name || "BizEase UAE",
+          shopName: companyData.shopName || companyData.name || "BizEase UAE",
+          address: companyData.address || "",
+          phone: companyData.phone || "",
+          email: companyData.email || "",
+          trn: companyData.trn || ""
+        };
+        console.log("[Receipt PDF] Company info from database:", {
+          name: companyInfo.name,
+          shopName: companyInfo.shopName,
+          address: companyInfo.address,
+          phone: companyInfo.phone,
+          email: companyInfo.email,
+          trn: companyInfo.trn
+        });
+      } else {
+        console.warn("[Receipt PDF] Company not found in database, using default");
+      }
+    } catch (companyError) {
+      console.warn("[Receipt PDF] Could not fetch company info:", companyError.message);
+      console.error("[Receipt PDF] Company error stack:", companyError.stack);
+    }
+    
+    console.log("[Receipt PDF] Generating PDF for sale:", saleData.id, "Language:", language, "CompanyInfo:", companyInfo ? "Present" : "Null");
+    const pdfArrayBuffer = await generateReceiptPdf(saleData, language, companyInfo);
+    
+    // Convert ArrayBuffer to Buffer
+    const pdfBuffer = Buffer.from(pdfArrayBuffer);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="receipt-${saleData.id}.pdf"`
+    );
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error("[Receipt] PDF generation error:", error);
+    console.error("[Receipt] PDF generation error stack:", error.stack);
+    res.status(500).json({ message: "Failed to generate PDF", error: error.message });
+  }
+});
+
+router.delete("/sales/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -466,7 +792,13 @@ router.delete("/sales/:id", authorizeRole("admin"), async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const sale = await Sale.findByPk(req.params.id, { transaction });
+    const sale = await Sale.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      },
+      transaction
+    });
     
     if (!sale) {
       await transaction.rollback();
@@ -511,7 +843,7 @@ router.delete("/sales/:id", authorizeRole("admin"), async (req, res) => {
   }
 });
 
-router.post("/sales", authorizeRole("admin"), async (req, res) => {
+router.post("/sales", authorizeRole("admin"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
@@ -541,6 +873,7 @@ router.post("/sales", authorizeRole("admin"), async (req, res) => {
     
     const inventoryItems = await InventoryItem.findAll({
       where: {
+        companyId: req.companyId, // ✅ Filter by companyId
         id: {
           [Op.in]: itemIds
         }
@@ -612,6 +945,7 @@ router.post("/sales", authorizeRole("admin"), async (req, res) => {
         items: saleItemsWithTotals, // Store as JSON
         totalSales: Number(totals.grandTotal?.toFixed?.(2) ?? totals.grandTotal ?? 0),
         totalVAT: Number(totals.vatAmount?.toFixed?.(2) ?? totals.vatAmount ?? 0),
+        companyId: req.companyId, // ✅ Set companyId
         createdByUid: req.user.uid,
         createdByDisplayName: req.user.displayName,
         createdByEmail: req.user.email
@@ -623,6 +957,42 @@ router.post("/sales", authorizeRole("admin"), async (req, res) => {
 
     const saleData = savedSale.get({ plain: true });
     console.log("[Sales] Sale created successfully:", { id: saleData.id, total: saleData.totalSales });
+
+    // Auto-create journal entry for sale (cash sale = revenue)
+    try {
+      const { createJournalEntryFromSale, postJournalEntry } = require("../server/services/accountingService");
+      const companyId = 1; // TODO: Get from user context
+      
+      console.log("[Sales] Creating journal entry for sale:", saleData.id);
+      console.log("[Sales] Sale data structure:", {
+        id: saleData.id,
+        totalSales: saleData.totalSales,
+        totalVAT: saleData.totalVAT,
+        date: saleData.date,
+        summary: saleData.summary
+      });
+      
+      const journalEntry = await createJournalEntryFromSale(saleData, companyId);
+      
+      if (journalEntry) {
+        console.log("[Sales] ✓ Journal entry created:", journalEntry.entryNumber || journalEntry.id);
+        // Auto-post the journal entry
+        await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+        console.log("[Sales] ✓ Journal entry posted:", journalEntry.entryNumber || journalEntry.id);
+      } else {
+        console.warn("[Sales] ⚠️ Journal entry was not created (returned null/undefined)");
+      }
+    } catch (accountingError) {
+      console.error("[Sales] ❌ Accounting integration failed:", accountingError.message);
+      console.error("[Sales] Error stack:", accountingError.stack);
+      console.error("[Sales] Error details:", {
+        name: accountingError.name,
+        message: accountingError.message,
+        code: accountingError.code
+      });
+      // Don't fail the sale creation if accounting fails, but log it clearly
+    }
+
     res.status(201).json(saleData);
   } catch (error) {
     console.error("[Sales] Create error:", error);
@@ -634,6 +1004,91 @@ router.post("/sales", authorizeRole("admin"), async (req, res) => {
     await transaction.rollback();
     const errorMessage = error.message || "Failed to record sale";
     res.status(500).json({ message: errorMessage });
+  }
+});
+
+// Backfill journal entries for existing sales that don't have them
+router.post("/sales/backfill-journal-entries", authorizeRole("admin"), setTenantContext, async (req, res) => {
+  try {
+    const { createJournalEntryFromSale, postJournalEntry } = require("../server/services/accountingService");
+    const { JournalEntry } = require("../models/accountingAssociations");
+    const companyId = req.companyId; // ✅ Get from tenant context
+
+    console.log("[Sales] Starting backfill of journal entries for existing sales...");
+
+    // Get all sales for this company
+    const allSales = await Sale.findAll({
+      where: {
+        companyId: req.companyId // ✅ Filter by companyId
+      },
+      order: [['date', 'ASC'], ['id', 'ASC']],
+      raw: false
+    });
+
+    const results = {
+      totalSales: allSales.length,
+      processed: 0,
+      created: 0,
+      skipped: 0,
+      errors: []
+    };
+
+    for (const sale of allSales) {
+      try {
+        const saleData = sale.get({ plain: true });
+        const saleId = saleData.id;
+
+        // Check if journal entry already exists
+        const existingEntry = await JournalEntry.findOne({
+          where: {
+            companyId,
+            referenceType: 'sale',
+            referenceId: saleId
+          }
+        });
+
+        if (existingEntry) {
+          console.log(`[Sales] Sale ${saleId} already has journal entry, skipping`);
+          results.skipped++;
+          continue;
+        }
+
+        // Create journal entry for this sale
+        console.log(`[Sales] Creating journal entry for sale ${saleId}...`);
+        const journalEntry = await createJournalEntryFromSale(saleData, companyId);
+
+        if (journalEntry) {
+          // Auto-post the journal entry
+          await postJournalEntry(journalEntry.id, req.user.email || req.user.uid, companyId);
+          console.log(`[Sales] ✓ Journal entry created and posted for sale ${saleId}`);
+          results.created++;
+        } else {
+          console.warn(`[Sales] ⚠️ Journal entry was not created for sale ${saleId} (returned null)`);
+          results.errors.push({ saleId, error: 'Journal entry creation returned null' });
+        }
+
+        results.processed++;
+      } catch (error) {
+        console.error(`[Sales] ❌ Error processing sale ${sale.id}:`, error.message);
+        results.errors.push({
+          saleId: sale.id,
+          error: error.message
+        });
+        results.processed++;
+      }
+    }
+
+    console.log("[Sales] Backfill completed:", results);
+    res.json({
+      message: `Backfill completed: ${results.created} created, ${results.skipped} skipped, ${results.errors.length} errors`,
+      results
+    });
+  } catch (error) {
+    console.error("[Sales] Backfill error:", error);
+    res.status(500).json({ 
+      message: "Failed to backfill journal entries",
+      error: error.message 
+    });
   }
 });
 

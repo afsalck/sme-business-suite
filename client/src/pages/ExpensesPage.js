@@ -8,33 +8,33 @@ import EmptyState from "../components/EmptyState";
 import { formatCurrency } from "../utils/formatters";
 import useAuth from "../hooks/useAuth";
 
-// Dubai SME Expense Categories
+// Expense categories - will be translated in component
 const EXPENSE_CATEGORIES = [
-  "Office Rent",
-  "Utilities (Electricity, Water, Internet)",
-  "Salaries & Wages",
-  "Professional Services (Legal, Accounting)",
-  "Marketing & Advertising",
-  "Office Supplies",
-  "Equipment & Furniture",
-  "Travel & Transportation",
-  "Insurance",
-  "Bank Charges",
-  "Software & Subscriptions",
-  "Maintenance & Repairs",
-  "Training & Development",
-  "Telecommunications",
-  "Other"
+  { value: "Office Rent", key: "expenses.categories.officeRent" },
+  { value: "Utilities (Electricity, Water, Internet)", key: "expenses.categories.utilities" },
+  { value: "Salaries & Wages", key: "expenses.categories.salaries" },
+  { value: "Professional Services (Legal, Accounting)", key: "expenses.categories.professionalServices" },
+  { value: "Marketing & Advertising", key: "expenses.categories.marketing" },
+  { value: "Office Supplies", key: "expenses.categories.officeSupplies" },
+  { value: "Equipment & Furniture", key: "expenses.categories.equipment" },
+  { value: "Travel & Transportation", key: "expenses.categories.travel" },
+  { value: "Insurance", key: "expenses.categories.insurance" },
+  { value: "Bank Charges", key: "expenses.categories.bankCharges" },
+  { value: "Software & Subscriptions", key: "expenses.categories.software" },
+  { value: "Maintenance & Repairs", key: "expenses.categories.maintenance" },
+  { value: "Training & Development", key: "expenses.categories.training" },
+  { value: "Telecommunications", key: "expenses.categories.telecommunications" },
+  { value: "Other", key: "expenses.categories.other" }
 ];
 
 const PAYMENT_TYPES = [
-  "Cash",
-  "Bank Transfer",
-  "Credit Card",
-  "Debit Card",
-  "Cheque",
-  "Online Payment",
-  "Other"
+  { value: "Cash", key: "expenses.paymentTypes.cash" },
+  { value: "Bank Transfer", key: "expenses.paymentTypes.bankTransfer" },
+  { value: "Credit Card", key: "expenses.paymentTypes.creditCard" },
+  { value: "Debit Card", key: "expenses.paymentTypes.debitCard" },
+  { value: "Cheque", key: "expenses.paymentTypes.cheque" },
+  { value: "Online Payment", key: "expenses.paymentTypes.onlinePayment" },
+  { value: "Other", key: "expenses.paymentTypes.other" }
 ];
 
 const initialForm = {
@@ -62,6 +62,7 @@ export default function ExpensesPage({ language }) {
   const [editingExpense, setEditingExpense] = useState(null);
   const [viewingExpense, setViewingExpense] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   
   // Advanced filters
   const [filters, setFilters] = useState({
@@ -147,7 +148,7 @@ export default function ExpensesPage({ language }) {
       setShowForm(false);
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.message || "Failed to save expense");
+      setError(err.response?.data?.message || t("expenses.failedToSave"));
     } finally {
       setSaving(false);
     }
@@ -156,7 +157,7 @@ export default function ExpensesPage({ language }) {
   const handleEdit = (expense) => {
     // Check permission: Staff can only edit their own expenses
     if (role === "staff" && expense.createdByUid !== uid) {
-      alert("You can only edit your own expenses");
+      alert(t("expenses.onlyEditOwn"));
       return;
     }
     
@@ -177,11 +178,11 @@ export default function ExpensesPage({ language }) {
   const handleDelete = async (expense) => {
     // Check permission: Staff can only delete their own expenses
     if (role === "staff" && expense.createdByUid !== uid) {
-      alert("You can only delete your own expenses");
+      alert(t("expenses.onlyDeleteOwn"));
       return;
     }
 
-    if (!window.confirm(`Are you sure you want to delete this expense?`)) {
+    if (!window.confirm(t("expenses.deleteConfirm"))) {
       return;
     }
 
@@ -190,7 +191,7 @@ export default function ExpensesPage({ language }) {
       setExpenses((prev) => prev.filter(exp => exp.id !== expense.id));
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.message || "Failed to delete expense");
+      alert(err.response?.data?.message || t("expenses.failedToDelete"));
     }
   };
 
@@ -200,7 +201,36 @@ export default function ExpensesPage({ language }) {
       setViewingExpense(data);
     } catch (err) {
       console.error(err);
-      alert(err.response?.data?.message || "Failed to load expense");
+      alert(err.response?.data?.message || t("expenses.failedToLoad"));
+    }
+  };
+
+  const handleBackfillJournalEntries = async () => {
+    if (!isAdmin) return;
+    
+    const confirmMessage = t("expenses.backfillConfirm");
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setBackfilling(true);
+    try {
+      const { data } = await apiClient.post("/expenses/backfill-journal-entries");
+      console.log("[Expense] Backfill completed:", data);
+      
+      const message = `${t("expenses.backfillCompleted")}\n\n${t("expenses.backfillCreated", { created: data.results.created })}\n${t("expenses.backfillSkipped", { skipped: data.results.skipped })}\n${t("expenses.backfillErrors", { errors: data.results.errors.length })}`;
+      if (data.results.errors.length > 0) {
+        alert(message + `\n\n${t("expenses.checkConsoleForErrors")}`);
+        console.error("[Expense] Backfill errors:", data.results.errors);
+      } else {
+        alert(message);
+      }
+    } catch (err) {
+      console.error("[Expense] Backfill error:", err);
+      const errorMessage = err.response?.data?.message || err.message || t("expenses.backfillFailed");
+      alert(`${t("common.error")}: ${errorMessage}`);
+    } finally {
+      setBackfilling(false);
     }
   };
 
@@ -211,13 +241,13 @@ export default function ExpensesPage({ language }) {
     // Validate file type
     const validTypes = ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
     if (!validTypes.includes(file.type)) {
-      alert("Please upload a PDF, JPG, or PNG file");
+      alert(t("expenses.fileTypeError"));
       return;
     }
 
     // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
-      alert("File size must be less than 5MB");
+      alert(t("expenses.fileSizeError"));
       return;
     }
 
@@ -228,7 +258,7 @@ export default function ExpensesPage({ language }) {
     
     // TODO: Upload to server/cloud storage and get URL
     // For now, we'll use a placeholder
-    alert("Receipt upload functionality - implement cloud storage upload here");
+    alert(t("expenses.receiptUploadHint"));
   };
 
   const resetForm = () => {
@@ -255,14 +285,24 @@ export default function ExpensesPage({ language }) {
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <h2 className="text-xl font-semibold text-slate-800">{t("expenses.title")}</h2>
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
+            {isAdmin && expenses.length > 0 && (
+              <button
+                onClick={handleBackfillJournalEntries}
+                disabled={backfilling}
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Create journal entries for all existing expenses that don't have them"
+              >
+                {backfilling ? t("expenses.processing") : `✓ ${t("expenses.createJournalEntries")}`}
+              </button>
+            )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-600">
-              <span className="font-medium">Total: </span>
+              <span className="font-medium">{t("expenses.total")}: </span>
               <span>{formatCurrency(totals.totalExpenses, language === "ar" ? "ar-AE" : "en-AE")}</span>
             </div>
             {totals.totalVAT > 0 && (
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-600">
-                <span className="font-medium">Total VAT: </span>
+                <span className="font-medium">{t("expenses.totalVAT")}: </span>
                 <span>{formatCurrency(totals.totalVAT, language === "ar" ? "ar-AE" : "en-AE")}</span>
               </div>
             )}
@@ -272,10 +312,10 @@ export default function ExpensesPage({ language }) {
 
       {/* Advanced Filters */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="mb-4 text-lg font-semibold text-slate-800">Filters</h3>
+        <h3 className="mb-4 text-lg font-semibold text-slate-800">{t("expenses.filters")}</h3>
         <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-4">
           <div>
-            <label className="block text-sm font-medium text-slate-600">From Date</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.fromDate")}</label>
             <input
               type="date"
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -284,7 +324,7 @@ export default function ExpensesPage({ language }) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-600">To Date</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.toDate")}</label>
             <input
               type="date"
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -293,61 +333,61 @@ export default function ExpensesPage({ language }) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-600">Category</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.category")}</label>
             <select
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={filters.category}
               onChange={(e) => setFilters(prev => ({ ...prev, category: e.target.value }))}
             >
-              <option value="">All Categories</option>
+              <option value="">{t("expenses.allCategories")}</option>
               {EXPENSE_CATEGORIES.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
+                <option key={cat.value} value={cat.value}>{t(cat.key)}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-600">Supplier</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.supplier")}</label>
             <input
               type="text"
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={filters.supplier}
               onChange={(e) => setFilters(prev => ({ ...prev, supplier: e.target.value }))}
-              placeholder="Search supplier..."
+              placeholder={t("expenses.searchPlaceholder")}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-600">VAT Applicable</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.vatApplicable")}</label>
             <select
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={filters.vatApplicable}
               onChange={(e) => setFilters(prev => ({ ...prev, vatApplicable: e.target.value }))}
             >
-              <option value="">All</option>
-              <option value="true">Yes</option>
-              <option value="false">No</option>
+              <option value="">{t("expenses.all")}</option>
+              <option value="true">{t("expenses.yes")}</option>
+              <option value="false">{t("expenses.no")}</option>
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-600">Payment Type</label>
+            <label className="block text-sm font-medium text-slate-600">{t("expenses.paymentType")}</label>
             <select
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={filters.paymentType}
               onChange={(e) => setFilters(prev => ({ ...prev, paymentType: e.target.value }))}
             >
-              <option value="">All Types</option>
+              <option value="">{t("expenses.allTypes")}</option>
               {PAYMENT_TYPES.map(type => (
-                <option key={type} value={type}>{type}</option>
+                <option key={type.value} value={type.value}>{t(type.key)}</option>
               ))}
             </select>
           </div>
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-slate-600">Search</label>
+            <label className="block text-sm font-medium text-slate-600">{t("common.search")}</label>
             <input
               type="text"
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
               value={filters.search}
               onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-              placeholder="Search description, category, supplier..."
+              placeholder={t("expenses.searchPlaceholder")}
             />
           </div>
         </div>
@@ -356,7 +396,7 @@ export default function ExpensesPage({ language }) {
           onClick={() => setFilters({ from: "", to: "", category: "", supplier: "", vatApplicable: "", paymentType: "", search: "" })}
           className="mt-4 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
         >
-          Clear Filters
+          {t("expenses.clearFilters")}
         </button>
       </div>
 
@@ -365,7 +405,7 @@ export default function ExpensesPage({ language }) {
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-800">
-              {editingExpense ? "Edit Expense" : "Add Expense"}
+              {editingExpense ? t("expenses.editExpense") : t("expenses.addExpense")}
             </h3>
             {showForm && (
               <button
@@ -383,7 +423,7 @@ export default function ExpensesPage({ language }) {
               onClick={() => setShowForm(true)}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark"
             >
-              + Add Expense
+              + {t("expenses.addExpense")}
             </button>
           )}
           {showForm && (
@@ -391,7 +431,7 @@ export default function ExpensesPage({ language }) {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Category <span className="text-red-500">*</span>
+                    {t("expenses.category")} <span className="text-red-500">*</span>
                   </label>
                   <select
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
@@ -399,15 +439,15 @@ export default function ExpensesPage({ language }) {
                     onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))}
                     required
                   >
-                    <option value="">Select Category</option>
+                    <option value="">{t("expenses.category")}</option>
                     {EXPENSE_CATEGORIES.map(cat => (
-                      <option key={cat} value={cat}>{cat}</option>
+                      <option key={cat.value} value={cat.value}>{t(cat.key)}</option>
                     ))}
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Date <span className="text-red-500">*</span>
+                    {t("expenses.date")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="date"
@@ -421,7 +461,7 @@ export default function ExpensesPage({ language }) {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Amount <span className="text-red-500">*</span>
+                    {t("expenses.amount")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -435,7 +475,7 @@ export default function ExpensesPage({ language }) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Supplier
+                    {t("expenses.supplier")}
                   </label>
                   <input
                     type="text"
@@ -448,22 +488,22 @@ export default function ExpensesPage({ language }) {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Payment Type
+                    {t("expenses.paymentType")}
                   </label>
                   <select
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                     value={form.paymentType}
                     onChange={(e) => setForm((prev) => ({ ...prev, paymentType: e.target.value }))}
                   >
-                    <option value="">Select Payment Type</option>
+                    <option value="">{t("expenses.paymentType")}</option>
                     {PAYMENT_TYPES.map(type => (
-                      <option key={type} value={type}>{type}</option>
+                      <option key={type.value} value={type.value}>{t(type.key)}</option>
                     ))}
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-600">
-                    Receipt Upload
+                    {t("expenses.uploadReceipt")}
                   </label>
                   <input
                     type="file"
@@ -472,13 +512,13 @@ export default function ExpensesPage({ language }) {
                     onChange={handleReceiptUpload}
                   />
                   {form.receiptUrl && (
-                    <p className="mt-1 text-xs text-slate-500">Receipt uploaded</p>
+                    <p className="mt-1 text-xs text-slate-500">{t("expenses.uploadReceipt")}</p>
                   )}
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-600">
-                  Description
+                  {t("expenses.description")}
                 </label>
                 <textarea
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
@@ -497,22 +537,22 @@ export default function ExpensesPage({ language }) {
                     onChange={(e) => setForm((prev) => ({ ...prev, vatApplicable: e.target.checked }))}
                   />
                   <label htmlFor="vatApplicable" className="text-sm font-medium text-slate-700">
-                    VAT Applicable (5%)
+                    {t("expenses.vatApplicable")} (5%)
                   </label>
                 </div>
                 <div className="grid gap-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-slate-600">Base Amount:</span>
+                    <span className="text-slate-600">{t("expenses.baseAmount")}:</span>
                     <span className="font-medium">{formatCurrency(calculatedAmounts.baseAmount, language === "ar" ? "ar-AE" : "en-AE")}</span>
                   </div>
                   {form.vatApplicable && (
                     <div className="flex justify-between">
-                      <span className="text-slate-600">VAT (5%):</span>
+                      <span className="text-slate-600">{t("expenses.vatAmount")} (5%):</span>
                       <span className="font-medium">{formatCurrency(calculatedAmounts.vatAmount, language === "ar" ? "ar-AE" : "en-AE")}</span>
                     </div>
                   )}
                   <div className="flex justify-between border-t border-slate-300 pt-2">
-                    <span className="font-semibold text-slate-800">Total Amount:</span>
+                    <span className="font-semibold text-slate-800">{t("expenses.totalAmount")}:</span>
                     <span className="font-semibold text-slate-800">{formatCurrency(calculatedAmounts.totalAmount, language === "ar" ? "ar-AE" : "en-AE")}</span>
                   </div>
                 </div>
@@ -526,14 +566,14 @@ export default function ExpensesPage({ language }) {
                   disabled={saving}
                   className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark disabled:opacity-60"
                 >
-                  {saving ? t("common.loading") : (editingExpense ? "Update Expense" : "Add Expense")}
+                  {saving ? t("common.loading") : (editingExpense ? t("common.save") : t("expenses.addExpense"))}
                 </button>
                 <button
                   type="button"
                   onClick={resetForm}
                   className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </form>

@@ -28,20 +28,39 @@ async function checkVatFilingReminder() {
 /**
  * Schedule notification cron job
  * Runs daily at 9 AM UAE time (5 AM UTC)
+ * In development mode, can run more frequently for testing
  */
 function scheduleNotificationCron() {
   try {
-    // Schedule for 9 AM UAE time (UTC+4) = 5 AM UTC
-    // Cron format: minute hour day month weekday
-    cron.schedule('0 5 * * *', async () => {
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
+    // In development, allow more frequent runs for testing (every 5 minutes)
+    // Set NOTIFICATION_CRON_TEST=true in .env to enable
+    const testMode = process.env.NOTIFICATION_CRON_TEST === 'true';
+    
+    let cronSchedule;
+    if (testMode && isDevelopment) {
+      // Test mode: Run every 5 minutes
+      cronSchedule = '*/5 * * * *';
+      console.log('⚠️  NOTIFICATION CRON TEST MODE: Running every 5 minutes');
+      console.log('   Set NOTIFICATION_CRON_TEST=false in .env to disable');
+    } else {
+      // Production: Daily at 9 AM UAE time (5 AM UTC)
+      cronSchedule = '0 5 * * *';
+    }
+    
+    // Schedule the cron job
+    cron.schedule(cronSchedule, async () => {
       try {
         console.log('[Notification Cron] Running daily notification checks at 9 AM UAE time...');
         
         // Run all expiry checks
         const results = await runAllExpiryChecks();
         
-        // Send daily digest email
-        await sendDailyNotificationDigest(results);
+        // Send daily digest email (only in production mode)
+        if (!testMode) {
+          await sendDailyNotificationDigest(results);
+        }
 
         // VAT filing reminders
         await checkVatFilingReminder();
@@ -54,7 +73,11 @@ function scheduleNotificationCron() {
       timezone: 'UTC' // Cron runs in UTC, we adjust time to match UAE
     });
 
-    console.log('✓ Notification cron job scheduled (daily at 9 AM UAE time)');
+    if (testMode) {
+      console.log('✓ Notification cron job scheduled (TEST MODE: every 5 minutes)');
+    } else {
+      console.log('✓ Notification cron job scheduled (daily at 9 AM UAE time)');
+    }
   } catch (error) {
     console.error('⚠️  Failed to schedule notification cron job:', error.message);
     throw error;

@@ -89,6 +89,12 @@ const Expense = sequelize.define('Expense', {
     type: DataTypes.STRING,
     allowNull: true,
     field: 'updatedByEmail'
+  },
+  companyId: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+    comment: 'Company/tenant ID for multi-tenancy'
   }
 }, {
   tableName: 'expenses',

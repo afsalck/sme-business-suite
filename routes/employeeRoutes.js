@@ -3,6 +3,7 @@ const dayjs = require("dayjs");
 const { sequelize } = require("../server/config/database");
 const Employee = require("../models/Employee");
 const { authorizeRole } = require("../server/middleware/authMiddleware");
+const { setTenantContext } = require("../server/middleware/tenantMiddleware");
 
 const router = express.Router();
 
@@ -25,7 +26,7 @@ function mapEmployee(employee) {
   };
 }
 
-router.get("/", async (req, res) => {
+router.get("/", setTenantContext, async (req, res) => {
   console.log(`[Employees] GET / - Fetching employees`);
   
   // Check SQL Server connection
@@ -41,6 +42,9 @@ router.get("/", async (req, res) => {
 
   try {
     const employees = await Employee.findAll({
+      where: {
+        companyId: req.companyId // ✅ Filter by companyId
+      },
       attributes: {
         exclude: [] // Explicitly select only defined fields
       },
@@ -70,7 +74,7 @@ router.get("/", async (req, res) => {
 });
 
 // Only admin can create employees
-router.post("/", authorizeRole("admin"), async (req, res) => {
+router.post("/", authorizeRole("admin"), setTenantContext, async (req, res) => {
   console.log(`[Employees] POST / - Creating employee: ${req.body.name}`);
   
   // Check SQL Server connection
@@ -85,6 +89,7 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
     // Map legacy fields to new HR fields for backward compatibility
     const employeeData = {
       ...req.body,
+      companyId: req.companyId, // ✅ Assign companyId
       // Map name -> fullName if name is provided
       fullName: req.body.fullName || req.body.name || "",
       // Map position -> designation if position is provided
@@ -104,6 +109,22 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
     const employee = await Employee.create(employeeData);
     console.log(`[Employees] Employee created successfully: ${employee.id}`);
     
+    // Immediately check for expiries and create notifications
+    try {
+      console.log('[Employees] Checking employee expiries immediately for:', employee.fullName);
+      console.log('[Employees] Passport expiry:', employee.passportExpiry);
+      console.log('[Employees] Visa expiry:', employee.visaExpiry);
+      
+      const { checkEmployeeExpiriesImmediate } = require('../server/services/notificationService');
+      const notifications = await checkEmployeeExpiriesImmediate(employee);
+      
+      console.log(`[Employees] Created ${notifications.length} notification(s) for employee ${employee.fullName}`);
+    } catch (notifError) {
+      // Don't fail employee creation if notification check fails
+      console.error('[Employees] Notification check failed (non-critical):', notifError.message);
+      console.error('[Employees] Notification error stack:', notifError.stack);
+    }
+    
     res.status(201).json(mapEmployee(employee));
   } catch (error) {
     console.error("[Employees] Create error:", error.message);
@@ -114,7 +135,7 @@ router.post("/", authorizeRole("admin"), async (req, res) => {
   }
 });
 
-router.put("/:id", authorizeRole("admin"), async (req, res) => {
+router.put("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   console.log(`[Employees] PUT /${req.params.id} - Updating employee`);
   
   // Check SQL Server connection
@@ -131,7 +152,31 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
       return res.status(404).json({ message: "Employee not found" });
     }
     
+    // Check if passport or visa expiry is being updated
+    const expiryFieldsChanged = req.body.passportExpiry !== undefined || req.body.visaExpiry !== undefined;
+    
     await employee.update(req.body);
+    
+    // If expiry fields were updated, check for notifications immediately
+    if (expiryFieldsChanged) {
+      try {
+        // Reload employee to get updated values
+        await employee.reload();
+        console.log('[Employees] Expiry fields changed, checking notifications for:', employee.fullName);
+        console.log('[Employees] Updated passport expiry:', employee.passportExpiry);
+        console.log('[Employees] Updated visa expiry:', employee.visaExpiry);
+        
+        const { checkEmployeeExpiriesImmediate } = require('../server/services/notificationService');
+        const notifications = await checkEmployeeExpiriesImmediate(employee);
+        
+        console.log(`[Employees] Created ${notifications.length} notification(s) for updated employee ${employee.fullName}`);
+      } catch (notifError) {
+        // Don't fail employee update if notification check fails
+        console.error('[Employees] Notification check failed (non-critical):', notifError.message);
+        console.error('[Employees] Notification error stack:', notifError.stack);
+      }
+    }
+    
     res.json(mapEmployee(employee));
   } catch (error) {
     console.error("[Employees] Update error:", error.message);
@@ -142,7 +187,7 @@ router.put("/:id", authorizeRole("admin"), async (req, res) => {
   }
 });
 
-router.delete("/:id", authorizeRole("admin"), async (req, res) => {
+router.delete("/:id", authorizeRole("admin"), setTenantContext, async (req, res) => {
   console.log(`[Employees] DELETE /${req.params.id} - Deleting employee`);
   
   // Check SQL Server connection
@@ -153,7 +198,12 @@ router.delete("/:id", authorizeRole("admin"), async (req, res) => {
   }
 
   try {
-    const employee = await Employee.findByPk(req.params.id);
+    const employee = await Employee.findOne({
+      where: {
+        id: req.params.id,
+        companyId: req.companyId // ✅ Filter by companyId
+      }
+    });
     
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });

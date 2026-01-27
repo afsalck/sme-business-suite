@@ -7,6 +7,7 @@ import apiClient from "../services/apiClient";
 import LoadingState from "../components/LoadingState";
 import EmptyState from "../components/EmptyState";
 import { formatCurrency } from "../utils/formatters";
+import useCompany from "../hooks/useCompany";
 
 const createItemForm = () => ({
   name: "",
@@ -35,6 +36,7 @@ const createSaleForm = () => ({
 export default function InventoryPage({ language }) {
   const { t } = useTranslation();
   const { role } = useAuth();
+  const { company } = useCompany();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [sales, setSales] = useState([]);
@@ -44,6 +46,8 @@ export default function InventoryPage({ language }) {
   const [savingSale, setSavingSale] = useState(false);
   const [error, setError] = useState(null);
   const [saleError, setSaleError] = useState(null);
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [backfilling, setBackfilling] = useState(false);
 
   const canManageInventory = role === "admin";
 
@@ -81,14 +85,90 @@ export default function InventoryPage({ language }) {
         salePrice: Number(itemForm.salePrice),
         reorderLevel: Number(itemForm.reorderLevel) || 0
       };
-      const { data } = await apiClient.post("/inventory", payload);
-      setItems((prev) => [data, ...prev]);
+      
+      if (editingItemId) {
+        // Update existing item
+        const { data } = await apiClient.put(`/inventory/${editingItemId}`, payload);
+        setItems((prev) => prev.map(item => (item.id || item._id) === editingItemId ? data : item));
+        setEditingItemId(null);
+      } else {
+        // Create new item
+        const { data } = await apiClient.post("/inventory", payload);
+        setItems((prev) => [data, ...prev]);
+      }
+      
       setItemForm(createItemForm());
     } catch (err) {
       console.error(err);
       setError(err);
     } finally {
       setSavingItem(false);
+    }
+  };
+
+  const handleEditItem = (item) => {
+    if (!canManageInventory) return;
+    setEditingItemId(item.id || item._id);
+    setItemForm({
+      name: item.name || "",
+      sku: item.sku || "",
+      category: item.category || "",
+      stock: item.stock || "",
+      costPrice: item.costPrice || "",
+      salePrice: item.salePrice || "",
+      supplier: item.supplier || "",
+      reorderLevel: item.reorderLevel || ""
+    });
+    // Scroll to form
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingItemId(null);
+    setItemForm(createItemForm());
+    setError(null);
+  };
+
+  const handleDeleteItem = async (itemId, itemName) => {
+    if (!canManageInventory) return;
+    
+    const confirmMessage = t("inventory.deleteItemConfirm", { itemName });
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setError(null);
+    try {
+      await apiClient.delete(`/inventory/${itemId}`);
+      setItems((prev) => prev.filter((item) => (item.id || item._id) !== itemId));
+    } catch (err) {
+      console.error(err);
+      setError(err);
+      alert(err.response?.data?.message || t("inventory.deleteItemFailed"));
+    }
+  };
+
+  const handleDeleteSale = async (saleId, saleDate, saleTotal) => {
+    if (!canManageInventory) return;
+    
+    const confirmMessage = t("inventory.deleteSaleConfirm", {
+      date: dayjs(saleDate).format("YYYY-MM-DD"),
+      amount: formatCurrency(saleTotal, language === "ar" ? "ar-AE" : "en-AE")
+    });
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setSaleError(null);
+    try {
+      await apiClient.delete(`/inventory/sales/${saleId}`);
+      setSales((prev) => prev.filter((sale) => (sale.id || sale._id) !== saleId));
+      // Reload inventory items to reflect restored stock
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      setSaleError(err);
+      alert(err.response?.data?.message || t("inventory.failedToDeleteSale"));
     }
   };
 
@@ -185,6 +265,35 @@ export default function InventoryPage({ language }) {
     }
   };
 
+  const handleBackfillJournalEntries = async () => {
+    if (!canManageInventory) return;
+    
+    const confirmMessage = t("inventory.createJournalEntriesForSales");
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setBackfilling(true);
+    try {
+      const { data } = await apiClient.post("/inventory/sales/backfill-journal-entries");
+      console.log("[Sales] Backfill completed:", data);
+      
+      const message = `Backfill completed!\n\nCreated: ${data.results.created} journal entries\nSkipped: ${data.results.skipped} (already had entries)\nErrors: ${data.results.errors.length}`;
+      if (data.results.errors.length > 0) {
+        alert(message + `\n\n${t("inventory.checkConsoleForErrorDetails")}`);
+        console.error("[Sales] Backfill errors:", data.results.errors);
+      } else {
+        alert(message);
+      }
+    } catch (err) {
+      console.error("[Sales] Backfill error:", err);
+      const errorMessage = err.response?.data?.message || err.message || "Failed to backfill journal entries";
+      alert(`Error: ${errorMessage}`);
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
   if (loading) {
     return <LoadingState message={t("common.loading")} />;
   }
@@ -192,7 +301,7 @@ export default function InventoryPage({ language }) {
   if (error && items.length === 0) {
     return (
       <EmptyState
-        title="Failed to load inventory"
+        title={t("inventory.failedToLoadInventory")}
         description="Check your API connection."
         action={
           <button
@@ -211,7 +320,20 @@ export default function InventoryPage({ language }) {
     <div className={clsx("space-y-6", language === "ar" && "rtl")}>
       {canManageInventory && (
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-800">{t("inventory.addItem")}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-slate-800">
+              {editingItemId ? t("inventory.editInventoryItem") : t("inventory.addItem")}
+            </h2>
+            {editingItemId && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="text-sm text-slate-600 hover:text-slate-800 font-medium transition"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
           <form onSubmit={handleItemSubmit} className="mt-4 space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
@@ -226,11 +348,20 @@ export default function InventoryPage({ language }) {
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-600">SKU</label>
+                <label className="text-sm font-medium text-slate-600">{t("inventory.sku")}</label>
                 <input
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                   value={itemForm.sku}
                   onChange={(e) => setItemForm((prev) => ({ ...prev, sku: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-slate-600">{t("inventory.category")}</label>
+                <input
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={itemForm.category}
+                  onChange={(e) => setItemForm((prev) => ({ ...prev, category: e.target.value }))}
+                  placeholder={t("inventory.categoryPlaceholder")}
                 />
               </div>
               <div>
@@ -256,7 +387,7 @@ export default function InventoryPage({ language }) {
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-600">Cost Price</label>
+                <label className="text-sm font-medium text-slate-600">{t("inventory.costPrice")}</label>
                 <input
                   type="number"
                   min="0"
@@ -273,19 +404,41 @@ export default function InventoryPage({ language }) {
                   onChange={(e) => setItemForm((prev) => ({ ...prev, supplier: e.target.value }))}
                 />
               </div>
+              <div>
+                <label className="text-sm font-medium text-slate-600">{t("inventory.reorderLevel")}</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={itemForm.reorderLevel}
+                  onChange={(e) => setItemForm((prev) => ({ ...prev, reorderLevel: e.target.value }))}
+                  placeholder={t("inventory.minimumStockLevel")}
+                />
+              </div>
             </div>
             {error && (
               <p className="text-sm text-red-600">
                 {error.response?.data?.message || "Failed to save item"}
               </p>
             )}
-            <button
-              type="submit"
-              disabled={savingItem}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark disabled:opacity-60"
-            >
-              {savingItem ? t("common.loading") : t("common.save")}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={savingItem}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark disabled:opacity-60"
+              >
+                  {savingItem ? t("common.loading") : editingItemId ? t("inventory.updateItem") : t("inventory.addItem")}
+              </button>
+              {editingItemId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
+                >
+                  {t("common.cancel")}
+                </button>
+              )}
+            </div>
           </form>
         </div>
       )}
@@ -293,7 +446,7 @@ export default function InventoryPage({ language }) {
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-xl font-semibold text-slate-800">{t("inventory.title")}</h2>
         {items.length === 0 ? (
-          <EmptyState title="No inventory items" />
+          <EmptyState title={t("inventory.noInventoryItems")} />
         ) : (
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -302,22 +455,49 @@ export default function InventoryPage({ language }) {
                   <th className="px-3 py-2 text-left font-medium text-slate-500">
                     {t("inventory.itemName")}
                   </th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500">{t("inventory.sku")}</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500">{t("inventory.category")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500">{t("inventory.stock")}</th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500">
                     {t("inventory.salePrice")}
                   </th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500">{t("inventory.supplier")}</th>
+                  {canManageInventory && (
+                    <th className="px-3 py-2 text-left font-medium text-slate-500">{t("common.actions")}</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {items.map((item) => (
                   <tr key={item.id || item._id}>
                     <td className="px-3 py-3 font-medium text-slate-700">{item.name}</td>
+                    <td className="px-3 py-3 text-slate-600">{item.sku || "—"}</td>
+                    <td className="px-3 py-3 text-slate-600">{item.category || "—"}</td>
                     <td className="px-3 py-3 text-slate-600">{item.stock}</td>
                     <td className="px-3 py-3 text-slate-600">
                       {formatCurrency(item.salePrice, language === "ar" ? "ar-AE" : "en-AE")}
                     </td>
                     <td className="px-3 py-3 text-slate-600">{item.supplier || "—"}</td>
+                    {canManageInventory && (
+                      <td className="px-3 py-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEditItem(item)}
+                            className="text-sm text-primary hover:text-primary-dark font-medium transition"
+                            title={t("pos.editItem")}
+                          >
+                            {t("common.edit")}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteItem(item.id || item._id, item.name)}
+                            className="text-sm text-red-600 hover:text-red-700 font-medium transition"
+                            title={t("pos.deleteItem")}
+                          >
+                            {t("common.delete")}
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -392,7 +572,7 @@ export default function InventoryPage({ language }) {
                       <option value="">--</option>
                       {items.map((item) => (
                         <option key={item.id || item._id} value={item.id || item._id}>
-                          {item.name} (stock: {item.stock})
+                          {item.name} ({t("inventory.stock")}: {item.stock})
                         </option>
                       ))}
                     </select>
@@ -480,7 +660,19 @@ export default function InventoryPage({ language }) {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-semibold text-slate-800">{t("inventory.recordSale")}</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-slate-800">Sales History</h2>
+          {canManageInventory && sales.length > 0 && (
+            <button
+              onClick={handleBackfillJournalEntries}
+              disabled={backfilling}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              title="Create journal entries for all existing sales that don't have them"
+            >
+              {backfilling ? "Processing..." : "✓ Create Journal Entries for All Sales"}
+            </button>
+          )}
+        </div>
         {sales.length === 0 ? (
           <EmptyState title="No sales recorded" />
         ) : (
@@ -496,6 +688,7 @@ export default function InventoryPage({ language }) {
                     {t("invoices.total")}
                   </th>
                   <th className="px-3 py-2 text-left font-medium text-slate-500">Items</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-500">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -512,6 +705,43 @@ export default function InventoryPage({ language }) {
                       {sale.items
                         .map((item) => `${item.name} × ${item.quantity}`)
                         .join(", ")}
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex gap-3">
+                        <button
+                          onClick={async () => {
+                            try {
+                              const response = await apiClient.get(`/inventory/sales/${sale.id || sale._id}/pdf?lang=${language}`, {
+                                responseType: "blob"
+                              });
+                              const url = window.URL.createObjectURL(new Blob([response.data]));
+                              const link = document.createElement("a");
+                              link.href = url;
+                              link.setAttribute("download", `receipt-${sale.id || sale._id}.pdf`);
+                              document.body.appendChild(link);
+                              link.click();
+                              link.remove();
+                              window.URL.revokeObjectURL(url);
+                            } catch (err) {
+                              console.error("Error generating receipt PDF:", err);
+                              alert(t("inventory.failedToGenerateReceiptPdf"));
+                            }
+                          }}
+                          className="text-sm text-blue-600 hover:text-blue-700 font-medium transition"
+                          title="Print Receipt"
+                        >
+                          🧾 Receipt
+                        </button>
+                        {canManageInventory && (
+                          <button
+                            onClick={() => handleDeleteSale(sale.id || sale._id, sale.date, sale.totalSales)}
+                            className="text-sm text-red-600 hover:text-red-700 font-medium transition"
+                            title={t("inventory.deleteSale")}
+                          >
+                            {t("common.delete")}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

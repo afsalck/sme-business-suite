@@ -20,8 +20,8 @@ export default function DailySalesReportPage({ language }) {
   const [error, setError] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const [dateRange, setDateRange] = useState({
-    from: dayjs().subtract(30, "day").format("YYYY-MM-DD"),
-    to: dayjs().format("YYYY-MM-DD")
+    from: dayjs().format("YYYY-MM-DD"), // Today
+    to: dayjs().format("YYYY-MM-DD")    // Today
   });
 
   const loadReport = async () => {
@@ -57,6 +57,41 @@ export default function DailySalesReportPage({ language }) {
       to: dayjs().format("YYYY-MM-DD")
     });
   };
+
+  // Determine which filter button should be active
+  const getActiveFilter = () => {
+    const today = dayjs().format("YYYY-MM-DD");
+    const fromDate = dayjs(dateRange.from);
+    const toDate = dayjs(dateRange.to);
+    const todayDate = dayjs(today);
+    
+    // Check if it's "Today"
+    if (dateRange.from === today && dateRange.to === today) {
+      return 'today';
+    }
+    
+    // Check if it's "Last 7 Days"
+    const sevenDaysAgo = todayDate.subtract(7, 'day').format("YYYY-MM-DD");
+    if (dateRange.from === sevenDaysAgo && dateRange.to === today) {
+      return '7days';
+    }
+    
+    // Check if it's "Last 30 Days"
+    const thirtyDaysAgo = todayDate.subtract(30, 'day').format("YYYY-MM-DD");
+    if (dateRange.from === thirtyDaysAgo && dateRange.to === today) {
+      return '30days';
+    }
+    
+    // Check if it's "Last 90 Days"
+    const ninetyDaysAgo = todayDate.subtract(90, 'day').format("YYYY-MM-DD");
+    if (dateRange.from === ninetyDaysAgo && dateRange.to === today) {
+      return '90days';
+    }
+    
+    return 'custom';
+  };
+
+  const activeFilter = getActiveFilter();
 
   const handleDownloadExcel = async () => {
     setDownloading(true);
@@ -214,22 +249,48 @@ export default function DailySalesReportPage({ language }) {
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={() => {
+                const today = dayjs().format("YYYY-MM-DD");
+                setDateRange({ from: today, to: today });
+              }}
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                activeFilter === 'today'
+                  ? 'border-primary bg-primary text-white hover:bg-primary-dark'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Today
+            </button>
+            <button
+              type="button"
               onClick={() => handleQuickFilter(7)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                activeFilter === '7days'
+                  ? 'border-primary bg-primary text-white hover:bg-primary-dark'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
             >
               Last 7 Days
             </button>
             <button
               type="button"
               onClick={() => handleQuickFilter(30)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                activeFilter === '30days'
+                  ? 'border-primary bg-primary text-white hover:bg-primary-dark'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
             >
               Last 30 Days
             </button>
             <button
               type="button"
               onClick={() => handleQuickFilter(90)}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                activeFilter === '90days'
+                  ? 'border-primary bg-primary text-white hover:bg-primary-dark'
+                  : 'border-slate-300 text-slate-600 hover:bg-slate-100'
+              }`}
             >
               Last 90 Days
             </button>

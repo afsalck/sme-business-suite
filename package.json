@@ -8,7 +8,10 @@
     "server": "cd server && npm run dev",
     "client": "cd client && npm start",
     "install-all": "npm install && cd server && npm install && cd ../client && npm install",
-    "verify": "node verify-setup.js"
+    "verify": "node verify-setup.js",
+    "fix-invoices": "node scripts/fixInvoiceAmounts.js",
+    "setup-arabic-font": "node scripts/setup-arabic-font.js",
+    "move-arabic-font": "node scripts/move-arabic-font.js"
   },
   "keywords": [
     "business",
@@ -25,7 +28,6 @@
     "mssql": "^12.1.0",
     "multer": "^2.0.2",
     "sequelize": "^6.37.7",
-    "tedious": "^19.1.2",
     "xlsx": "^0.18.5"
   }
 }

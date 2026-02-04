@@ -6,7 +6,7 @@ import LoadingState from "../components/LoadingState";
 
 export default function LoginPage({ language }) {
   const { t } = useTranslation();
-  const { user, loading, loginWithEmail, loginWithGoogle, error } = useAuth();
+  const { user, loading, loginWithEmail, error } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState(null);
@@ -29,19 +29,6 @@ export default function LoginPage({ language }) {
     setFormError(null);
     try {
       await loginWithEmail(form.email, form.password);
-      // Navigation will happen automatically via onAuthStateChanged
-    } catch (err) {
-      setFormError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleGoogle = async () => {
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      await loginWithGoogle();
       // Navigation will happen automatically via onAuthStateChanged
     } catch (err) {
       setFormError(err.message);
@@ -89,19 +76,6 @@ export default function LoginPage({ language }) {
             {submitting ? t("common.loading") : t("auth.signIn")}
           </button>
         </form>
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={handleGoogle}
-            disabled={submitting}
-            className="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
-          >
-            {t("auth.googleSignIn")}
-          </button>
-        </div>
-        <p className="mt-6 text-center text-xs text-slate-400">
-          {t("auth.noAccount")} {t("auth.createAccount")}
-        </p>
       </div>
     </div>
   );

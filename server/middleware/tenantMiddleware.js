@@ -1,65 +1,23 @@
 /**
  * Tenant Middleware
- * Sets companyId (tenant context) from authenticated user
- * This ensures all queries are filtered by the user's company
- * Developers can access all companies (req.isDeveloper = true)
+ * Sets companyId (tenant context) from authenticated user.
+ *
+ * IMPORTANT:
+ * - This middleware should NOT grant cross-tenant (all companies) access.
+ * - Developer / super-admin cross-tenant access must be handled explicitly via
+ *   `developerMiddleware` on developer-only routes.
  */
 
 const User = require('../../models/User');
 
 /**
- * Check if email belongs to a developer
- * Developers can access all companies
- */
-function isDeveloperEmail(email) {
-  if (!email) return false;
-  
-  const emailLower = email.toLowerCase();
-  
-  // Check by email domain
-  const developerDomains = [
-    '@bizease.ae',
-    '@developer.com'
-  ];
-  
-  if (developerDomains.some(domain => emailLower.endsWith(domain))) {
-    return true;
-  }
-  
-  // Check by specific email addresses
-  const developerEmails = [
-    'developer@bizease.ae',
-    'admin@bizease.ae'
-  ];
-  
-  if (developerEmails.includes(emailLower)) {
-    return true;
-  }
-  
-  // Check by environment variable
-  if (process.env.DEVELOPER_EMAILS) {
-    const allowedEmails = process.env.DEVELOPER_EMAILS
-      .split(',')
-      .map(e => e.trim().toLowerCase());
-    
-    if (allowedEmails.includes(emailLower)) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
  * Set tenant context (companyId) from authenticated user
  * This middleware should be used after verifyFirebaseToken
- * Developers can access all companies (req.isDeveloper = true)
  */
 async function setTenantContext(req, res, next) {
   try {
-    // Check if user is a developer
-    const isDev = req.user && req.user.email ? isDeveloperEmail(req.user.email) : false;
-    req.isDeveloper = isDev;
+    // Tenant middleware never grants developer access.
+    req.isDeveloper = false;
     
     // Get companyId from authenticated user
     if (req.user && req.user.uid) {
@@ -74,12 +32,7 @@ async function setTenantContext(req, res, next) {
           req.userId = user.id;
           // Also update req.user with companyId for consistency
           req.user.companyId = user.companyId;
-          
-          if (isDev) {
-            console.log(`[Tenant] ✅ Developer access: ${req.user.email} (can access ALL companies)`);
-          } else {
-            console.log(`[Tenant] ✅ Company context set: companyId=${req.companyId} for user ${req.user.email}`);
-          }
+          console.log(`[Tenant] ✅ Company context set: companyId=${req.companyId} for user ${req.user.email}`);
         } else {
           // User exists but no companyId - use default
           req.companyId = 1;

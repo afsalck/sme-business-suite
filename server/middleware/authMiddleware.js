@@ -15,14 +15,17 @@ function isDeveloperEmail(email) {
   
   const emailLower = email.toLowerCase();
   
-  // Check by email domain
-  const developerDomains = [
-    '@bizease.ae',
-    '@developer.com'
-  ];
-  
-  if (developerDomains.some(domain => emailLower.endsWith(domain))) {
-    return true;
+  // Optional: domain-based developer detection.
+  // This is intentionally DISABLED by default because it can accidentally match real customer domains
+  // and break role management.
+  if (process.env.ALLOW_DEVELOPER_DOMAIN_BYPASS === "true" && process.env.DEVELOPER_DOMAINS) {
+    const developerDomains = process.env.DEVELOPER_DOMAINS
+      .split(",")
+      .map((d) => d.trim().toLowerCase())
+      .filter(Boolean);
+    if (developerDomains.some((domain) => emailLower.endsWith(domain))) {
+      return true;
+    }
   }
   
   // Check by specific email addresses
@@ -129,14 +132,12 @@ async function verifyFirebaseToken(req, res, next) {
       const isDev = isDeveloperEmail(decodedToken.email);
       
       let companyId;
-      let userRole = "staff"; // Default role
+      let userRole = "staff"; // Default role (do NOT auto-elevate here)
       
       if (isDev) {
         // Developers can bypass domain check - use default companyId
-        // Developers automatically get admin role
         companyId = 1;
-        userRole = "admin"; // ✅ Developers get admin role
-        console.log(`[Auth] ✅ Developer access granted: ${decodedToken.email} (bypassing domain check, role: admin)`);
+        console.log(`[Auth] ✅ Developer bypass granted: ${decodedToken.email} (bypassing domain check, role managed in DB)`);
       } else {
         companyId = await getCompanyIdFromEmail(decodedToken.email);
         
@@ -179,25 +180,14 @@ async function verifyFirebaseToken(req, res, next) {
     }
 
     // Set user info (use default role if user not found yet)
-    // If user is a developer but doesn't have admin role yet, upgrade them
-    const isDev = isDeveloperEmail(decodedToken.email);
-    let userRole = user?.role || (isDev ? "admin" : "staff");
-    
-    // Ensure developers always have admin role
-    if (isDev && userRole !== "admin") {
-      userRole = "admin";
-      // Update user role in background if user exists
-      if (user) {
-        User.update({ role: "admin" }, { where: { uid: decodedToken.uid } })
-          .catch(() => {}); // Ignore errors
-      }
-    }
+    // Role should be managed in SQL (or via Admin UI). Do not override roles here.
+    let userRole = user?.role || "staff";
     
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email,
       displayName: decodedToken.name,
-      role: userRole, // ✅ Admin for developers
+      role: userRole,
       companyId: user?.companyId || 1 // ✅ Include companyId (default to 1 if not found)
     };
 
@@ -228,6 +218,7 @@ function authorizeRole(...authorizedRoles) {
 
 module.exports = {
   verifyFirebaseToken,
-  authorizeRole
+  authorizeRole,
+  isDeveloperEmail
 };
 

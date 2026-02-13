@@ -82,7 +82,7 @@ export default function PayrollRecordsPage({ language }) {
       return;
     }
 
-    if (!confirm("Are you sure you want to process payroll for this period? This will calculate salaries for all employees.")) {
+    if (!window.confirm("Are you sure you want to process payroll for this period? This will calculate salaries for all employees.")) {
       return;
     }
 

@@ -265,7 +265,7 @@ export default function POSPage({ language }) {
       setBarcodeInput("");
       
       // Ask if user wants to print receipt
-      const printReceipt = confirm(t("pos.saleCompleted"));
+      const printReceipt = window.confirm(t("pos.saleCompleted"));
       if (printReceipt && savedSale) {
         try {
           // Download receipt PDF from server

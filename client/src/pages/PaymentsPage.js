@@ -220,7 +220,7 @@ export default function PaymentsPage({ language }) {
   };
 
   const handleConfirmPayment = async (paymentId) => {
-    if (!confirm("Are you sure you want to confirm this payment? This will create an accounting entry.")) {
+    if (!window.confirm("Are you sure you want to confirm this payment? This will create an accounting entry.")) {
       return;
     }
 

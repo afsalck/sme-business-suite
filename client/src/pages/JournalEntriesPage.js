@@ -139,7 +139,7 @@ export default function JournalEntriesPage({ language }) {
   };
 
   const handlePost = async (entryId) => {
-    if (!confirm("Are you sure you want to post this journal entry? This action cannot be undone.")) {
+    if (!window.confirm("Are you sure you want to post this journal entry? This action cannot be undone.")) {
       return;
     }
 

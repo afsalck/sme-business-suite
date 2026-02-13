@@ -116,7 +116,7 @@ export default function VatFilingPage({ language }) {
   };
 
   const handleSubmit = async (filingId) => {
-    if (!confirm(t("vatFiling.submitConfirm"))) {
+    if (!window.confirm(t("vatFiling.submitConfirm"))) {
       return;
     }
 

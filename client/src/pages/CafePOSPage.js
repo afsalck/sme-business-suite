@@ -240,7 +240,7 @@ export default function POSPage({ language }) {
   };
 
   const handleClearCart = () => {
-    if (confirm("Clear all items from cart?")) {
+    if (window.confirm("Clear all items from cart?")) {
       setCart([]);
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();

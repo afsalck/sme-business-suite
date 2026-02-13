@@ -244,7 +244,7 @@ export default function PaymentsPage({ language }) {
     };
     
     const action = statusLabels[newStatus] || "update status";
-    if (!confirm(`Are you sure you want to ${action} this payment?`)) {
+    if (!window.confirm(`Are you sure you want to ${action} this payment?`)) {
       return;
     }
 

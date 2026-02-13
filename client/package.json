@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "cross-env DISABLE_ESLINT_PLUGIN=true react-scripts start",
-    "build": "DISABLE_ESLINT_PLUGIN=true react-scripts build",
+    "build":  "cross-env DISABLE_ESLINT_PLUGIN=true react-scripts build",
     "test": "cross-env DISABLE_ESLINT_PLUGIN=true react-scripts test",
     "eject": "react-scripts eject"
   },

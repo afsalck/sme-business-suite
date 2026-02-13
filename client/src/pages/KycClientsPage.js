@@ -102,7 +102,7 @@ export default function KycClientsPage({ language }) {
   };
 
   const handleUpdateKycStatus = async (clientId, status) => {
-    if (!confirm(t("kyc.changeKycStatusConfirm", { status }))) {
+    if (!window.confirm(t("kyc.changeKycStatusConfirm", { status }))) {
       return;
     }
 

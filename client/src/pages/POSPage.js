@@ -303,7 +303,7 @@ export default function POSPage({ language }) {
   };
 
   const handleClearCart = () => {
-    if (confirm(t("pos.clearCartConfirm"))) {
+    if (windows.confirm(t("pos.clearCartConfirm"))) {
       setCart([]);
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();

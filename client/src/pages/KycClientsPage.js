@@ -119,7 +119,7 @@ export default function KycClientsPage({ language }) {
   };
 
   const handlePerformAmlScreening = async (clientId) => {
-    if (!confirm(t("kyc.performAmlScreeningConfirm"))) {
+    if (!window.confirm(t("kyc.performAmlScreeningConfirm"))) {
       return;
     }
 

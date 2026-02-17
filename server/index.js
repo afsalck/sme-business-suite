@@ -35,13 +35,11 @@ const dotenv = require("dotenv");
 const { sequelize, testConnection } = require("./config/database");
 const { verifyFirebaseToken } = require("./middleware/authMiddleware");
 const { scheduleAlerts } = require("./services/alertService");
-const { killProcessOnPort } = require("./utils/portCleanup");
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 
-dotenv.config({
-  path: path.resolve(__dirname, "..", ".env")
-});
+require("dotenv").config();
+
 
 const app = express();
 const PORT = process.env.PORT || 5004;
@@ -312,12 +310,7 @@ async function bootstrap() {
 
     // Clean up any process using the port before starting
     console.log(`Checking port ${PORT}...`);
-    try {
-      await killProcessOnPort(PORT);
-    } catch (portError) {
-      console.warn("⚠️  Port cleanup warning:", portError.message);
-      // Continue anyway
-    }
+   
     
     // Small delay to ensure port is released
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -334,19 +327,7 @@ async function bootstrap() {
     // Handle server errors (like port already in use)
     server.on('error', async (error) => {
       console.error("❌ Server error event:", error.message);
-      if (error.code === 'EADDRINUSE') {
-        console.log(`\n⚠️  Port ${PORT} is still in use. Attempting to clean up...`);
-        try {
-          await killProcessOnPort(PORT);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          console.log("✓ Port cleaned up. Please restart the server (nodemon should auto-restart).");
-        } catch (cleanupError) {
-          console.error("Failed to clean up port:", cleanupError.message);
-        }
-      } else {
-        console.error("Server error details:", error);
-      }
-    });
+    
 
     // Keep the process alive
     server.on('close', () => {
@@ -392,11 +373,7 @@ async function bootstrap() {
       console.error("   3. Check if SQL Server allows remote connections");
       console.error("   4. Verify SQL Server authentication (Windows Auth vs SQL Auth)");
       console.error(`\n   Error details: ${error.message}`);
-    } else if (error.code === 'EADDRINUSE') {
-      console.log(`\n⚠️  Port ${PORT} is in use. Attempting to clean up...`);
-      killProcessOnPort(PORT).then(() => {
-        console.log("✓ Port cleaned up. Please restart the server.");
-      });
+    } 
     } else {
       console.error(`\n   Error type: ${error.name}`);
       console.error(`   Error code: ${error.code || 'N/A'}`);
@@ -409,9 +386,7 @@ async function bootstrap() {
       console.warn("   Some features may not work until database is connected.");
       
       // Start server anyway
-      console.log(`\nChecking port ${PORT}...`);
-      await killProcessOnPort(PORT);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+     
       
       const server = app.listen(PORT, () => {
         console.log(`✅ Server listening on port ${PORT} (Database disconnected)`);
@@ -420,14 +395,7 @@ async function bootstrap() {
       // Store server globally to prevent garbage collection
       globalServer = server;
       
-      server.on('error', async (err) => {
-        if (err.code === 'EADDRINUSE') {
-          console.log(`\n⚠️  Port ${PORT} is still in use. Attempting to clean up...`);
-          await killProcessOnPort(PORT);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          console.log("✓ Port cleaned up. Please restart the server.");
-        }
-      });
+    
       
       // Return server to keep it alive
       return server;

@@ -327,7 +327,7 @@ async function bootstrap() {
     // Handle server errors (like port already in use)
     server.on('error', async (error) => {
       console.error("❌ Server error event:", error.message);
-    
+    });
 
     // Keep the process alive
     server.on('close', () => {

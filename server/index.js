@@ -42,7 +42,7 @@ require("dotenv").config();
 
 
 const app = express();
-const PORT = process.env.PORT || 5004;
+const PORT = process.env.PORT;
 
 // Global server reference to keep it alive
 let globalServer = null;

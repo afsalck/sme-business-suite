@@ -372,8 +372,7 @@ async function bootstrap() {
       console.error("   2. Verify SQL Server is running");
       console.error("   3. Check if SQL Server allows remote connections");
       console.error("   4. Verify SQL Server authentication (Windows Auth vs SQL Auth)");
-      console.error(`\n   Error details: ${error.message}`);
-    } 
+      console.error(`\n   Error details: ${error.message}`); 
     } else {
       console.error(`\n   Error type: ${error.name}`);
       console.error(`   Error code: ${error.code || 'N/A'}`);

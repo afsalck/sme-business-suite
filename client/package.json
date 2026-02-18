@@ -4,7 +4,7 @@
   "description": "",
   "main": "src/index.js",
  "scripts": {
-  "build": "CI=false react-scripts build", 
+  "build": "CI=false react-scripts build"
 },
   "keywords": [],
   "author": "",

@@ -71,31 +71,13 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: 'BizEase UAE API Documentation'
 }));
 
-app.get("/health", async (_, res) => {
-  // Test SQL Server connection
-  let dbStatus = "disconnected";
-  let dbPing = null;
-  
-  try {
-    const start = Date.now();
-    await sequelize.authenticate();
-    dbStatus = "connected";
-    dbPing = Date.now() - start;
-  } catch (error) {
-    dbStatus = "error";
-    dbPing = `error: ${error.message}`;
-  }
-  
-  res.json({
+app.get("/health", (req, res) => {
+  res.status(200).json({
     status: "ok",
-    timestamp: new Date().toISOString(),
-    database: {
-      type: "SQL Server",
-      state: dbStatus,
-      ping: dbPing
-    }
+    timestamp: new Date().toISOString()
   });
 });
+
 
 app.use("/api", verifyFirebaseToken);
 

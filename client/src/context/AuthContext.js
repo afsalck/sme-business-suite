@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
@@ -13,7 +13,8 @@ const AuthContext = createContext({
   user: null,
   role: null,
   companyId: null,
-  loading: true
+  loading: true,
+  error: null
 });
 
 export function AuthProvider({ children }) {
@@ -21,150 +22,51 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Define refreshRole function first so it can be used in useEffect
-  const refreshRole = useCallback(async () => {
-    if (!user) return;
-    
-    try {
-      // Force token refresh to ensure we have a valid token
-      const currentUser = auth.currentUser;
-      if (!currentUser) return;
-      
-      await currentUser.getIdToken(true); // Force refresh
-      
-      // Get updated role and companyId from backend
-      const { data } = await apiClient.get("/auth/me");
-      
-      if (data?.user) {
-        setUser(prevUser => ({
-          ...prevUser,
-          role: data.user.role,
-          companyId: data.user.companyId
-        }));
-        console.log(`✅ User data refreshed: role=${data.user.role}, companyId=${data.user.companyId}`);
-      }
-    } catch (err) {
-      console.error("Failed to refresh role:", err.message);
-    }
-  }, [user]);
-
-  // Separate effect for auto-refresh listeners (only depends on refreshRole)
+  /**
+   * 🔐 Single, clean auth initializer
+   * - No forced token refresh
+   * - No duplicate API calls
+   * - No visibility/focus listeners
+   * - Prevents previous-user flicker
+   */
   useEffect(() => {
-    if (!user) return;
-
-    // Auto-refresh role when page becomes visible (user might have changed role in SQL)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && user) {
-        refreshRole();
-      }
-    };
-
-    // Auto-refresh role when window regains focus
-    const handleFocus = () => {
-      if (user) {
-        refreshRole();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [user, refreshRole]);
-
-  // Main auth state listener (should only run once on mount)
-  useEffect(() => {
-    // Track if component is mounted to prevent state updates after unmount
-    let isMounted = true;
-    let hasInitialized = false;
-
-    // Set up listener for auth state changes
-    // onAuthStateChanged fires immediately with current user (or null)
-    // This is how we detect when auth is ready in Firebase v10
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      // Prevent state updates if component unmounted
-      if (!isMounted) return;
+      setLoading(true);
 
-      if (firebaseUser) {
-        try {
-          // Get token to ensure it's ready (with timeout to prevent hanging)
-          const tokenPromise = firebaseUser.getIdToken(true);
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Token timeout")), 5000)
-          );
-          
-          await Promise.race([tokenPromise, timeoutPromise]);
-          
-          // Set user immediately with default role (don't wait for API)
-          // This ensures redirect happens quickly
-          if (isMounted) {
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName,
-              role: "staff", // Default, will be updated by API call below
-              companyId: 1 // Default, will be updated by API call below
-            });
-          }
-          
-          // Try to get user role and companyId from backend (non-blocking, in background)
-          // This updates the role and companyId after redirect if successful
-          apiClient.get("/auth/me")
-            .then(({ data }) => {
-              if (isMounted && data?.user) {
-                setUser(prevUser => ({
-                  ...prevUser,
-                  role: data.user.role,
-                  companyId: data.user.companyId
-                }));
-                console.log(`✅ User data loaded: role=${data.user.role}, companyId=${data.user.companyId}`);
-              }
-            })
-            .catch((err) => {
-              // If API call fails, user already has default role - that's fine
-              console.warn("Failed to load user role from backend, using default:", err.message);
-            });
-        } catch (tokenError) {
-          console.error("Failed to get token:", tokenError);
-          // Even if token fails, set user so redirect can happen
-          // The ProtectedRoute will handle auth errors
-          if (isMounted) {
-            setUser({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName,
-              role: "staff",
-              companyId: 1
-            });
-          }
-        }
-      } else {
-        // No user logged in
-        if (isMounted) {
+      if (!firebaseUser) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        // Let Firebase manage token freshness
+        await firebaseUser.getIdToken();
+
+        // Single backend call
+        const { data } = await apiClient.get("/auth/me");
+
+        if (data?.user) {
+          setUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            displayName: firebaseUser.displayName,
+            role: data.user.role,
+            companyId: data.user.companyId
+          });
+        } else {
           setUser(null);
         }
-      }
-
-      // Set loading to false after first auth state check
-      // This happens immediately when onAuthStateChanged fires
-      if (isMounted && !hasInitialized) {
-        hasInitialized = true;
-        setLoading(false);
-      } else if (isMounted) {
-        // For subsequent changes, loading should already be false
+      } catch (err) {
+        console.error("Auth init failed:", err);
+        setUser(null);
+      } finally {
         setLoading(false);
       }
     });
 
-    // Cleanup function
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
-  }, []); // Empty dependency array - only run once on mount
+    return () => unsubscribe();
+  }, []);
 
   const loginWithEmail = async (email, password) => {
     setError(null);
@@ -178,8 +80,8 @@ export function AuthProvider({ children }) {
 
   const loginWithGoogle = async () => {
     setError(null);
-    const provider = new GoogleAuthProvider();
     try {
+      const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
     } catch (err) {
       setError(err.message);
@@ -201,8 +103,7 @@ export function AuthProvider({ children }) {
       error,
       loginWithEmail,
       loginWithGoogle,
-      logout,
-      refreshRole
+      logout
     }),
     [user, loading, error]
   );
@@ -213,4 +114,3 @@ export function AuthProvider({ children }) {
 export function useAuthContext() {
   return useContext(AuthContext);
 }
-

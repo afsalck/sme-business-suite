@@ -13,8 +13,7 @@ const AuthContext = createContext({
   user: null,
   role: null,
   companyId: null,
-  loading: true,
-  error: null
+  loading: true
 });
 
 export function AuthProvider({ children }) {
@@ -22,13 +21,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  /**
-   * 🔐 Single, clean auth initializer
-   * - No forced token refresh
-   * - No duplicate API calls
-   * - No visibility/focus listeners
-   * - Prevents previous-user flicker
-   */
+  // 🔑 SINGLE auth listener (runs once)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
@@ -40,10 +33,10 @@ export function AuthProvider({ children }) {
       }
 
       try {
-        // Let Firebase manage token freshness
+        // Let Firebase handle token refresh
         await firebaseUser.getIdToken();
 
-        // Single backend call
+        // ONE backend call
         const { data } = await apiClient.get("/auth/me");
 
         if (data?.user) {
@@ -70,23 +63,13 @@ export function AuthProvider({ children }) {
 
   const loginWithEmail = async (email, password) => {
     setError(null);
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
+    await signInWithEmailAndPassword(auth, email, password);
   };
 
   const loginWithGoogle = async () => {
     setError(null);
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
   };
 
   const logout = async () => {

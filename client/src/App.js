@@ -1,6 +1,6 @@
 import "./config/firebase";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AuthProvider } from "./context/AuthContext";
@@ -10,31 +10,33 @@ import Topbar from "./components/Topbar";
 import ProtectedRoute from "./components/ProtectedRoute";
 import DeveloperRoute from "./components/DeveloperRoute";
 import ModuleAccessRoute from "./components/ModuleAccessRoute";
+import LoadingState from "./components/LoadingState";
 
-import LoginPage from "./pages/LoginPage";
-import DashboardPage from "./pages/DashboardPage";
-import InvoicesPage from "./pages/InvoicesPage";
-import HRPage from "./pages/HRPage";
-import InventoryPage from "./pages/InventoryPage";
-import ExpensesPage from "./pages/ExpensesPage";
-import DailySalesReportPage from "./pages/DailySalesReportPage";
-import AdminManagementPage from "./pages/AdminManagementPage";
-import CompaniesManagementPage from "./pages/CompaniesManagementPage";
-import NotificationsPage from "./pages/NotificationsPage";
-import VatSettingsPage from "./pages/VatSettingsPage";
-import VatDashboardPage from "./pages/VatDashboardPage";
-import VatReportPage from "./pages/VatReportPage";
-import VatFilingPage from "./pages/VatFilingPage";
-import ChartOfAccountsPage from "./pages/ChartOfAccountsPage";
-import JournalEntriesPage from "./pages/JournalEntriesPage";
-import GeneralLedgerPage from "./pages/GeneralLedgerPage";
-import FinancialStatementsPage from "./pages/FinancialStatementsPage";
-import PaymentsPage from "./pages/PaymentsPage";
-import PayrollPeriodsPage from "./pages/PayrollPeriodsPage";
-import PayrollRecordsPage from "./pages/PayrollRecordsPage";
-import KycClientsPage from "./pages/KycClientsPage";
-import ReportsPage from "./pages/ReportsPage";
-import POSPage from "./pages/POSPage";
+// Lazy load all page components for code splitting and better performance
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const InvoicesPage = lazy(() => import("./pages/InvoicesPage"));
+const HRPage = lazy(() => import("./pages/HRPage"));
+const InventoryPage = lazy(() => import("./pages/InventoryPage"));
+const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
+const DailySalesReportPage = lazy(() => import("./pages/DailySalesReportPage"));
+const AdminManagementPage = lazy(() => import("./pages/AdminManagementPage"));
+const CompaniesManagementPage = lazy(() => import("./pages/CompaniesManagementPage"));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const VatSettingsPage = lazy(() => import("./pages/VatSettingsPage"));
+const VatDashboardPage = lazy(() => import("./pages/VatDashboardPage"));
+const VatReportPage = lazy(() => import("./pages/VatReportPage"));
+const VatFilingPage = lazy(() => import("./pages/VatFilingPage"));
+const ChartOfAccountsPage = lazy(() => import("./pages/ChartOfAccountsPage"));
+const JournalEntriesPage = lazy(() => import("./pages/JournalEntriesPage"));
+const GeneralLedgerPage = lazy(() => import("./pages/GeneralLedgerPage"));
+const FinancialStatementsPage = lazy(() => import("./pages/FinancialStatementsPage"));
+const PaymentsPage = lazy(() => import("./pages/PaymentsPage"));
+const PayrollPeriodsPage = lazy(() => import("./pages/PayrollPeriodsPage"));
+const PayrollRecordsPage = lazy(() => import("./pages/PayrollRecordsPage"));
+const KycClientsPage = lazy(() => import("./pages/KycClientsPage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
+const POSPage = lazy(() => import("./pages/POSPage"));
 
 function AppShell({ language, onToggleLanguage }) {
   return (
@@ -68,9 +70,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          {/* PUBLIC */}
-          <Route path="/login" element={<LoginPage language={language} />} />
+        <Suspense fallback={<LoadingState />}>
+          <Routes>
+            {/* PUBLIC */}
+            <Route path="/login" element={<LoginPage language={language} />} />
 
           {/* PROTECTED */}
           <Route element={<ProtectedRoute />}>
@@ -151,9 +154,10 @@ export default function App() {
             </Route>
           </Route>
 
-          {/* FALLBACK */}
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
+            {/* FALLBACK */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -22,8 +22,9 @@ apiClient.interceptors.request.use(
         // No need to wait for authStateReady (doesn't exist in v10)
         const currentUser = auth.currentUser;
         if (currentUser) {
-          // Get fresh token (force refresh to ensure it's valid)
-          const token = await currentUser.getIdToken(true);
+          // Get token (only force refresh if token is expired or about to expire)
+          // This reduces unnecessary token refreshes and improves performance
+          const token = await currentUser.getIdToken(false);
           
           if (token) {
             config.headers.Authorization = `Bearer ${token}`;

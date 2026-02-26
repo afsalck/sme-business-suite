@@ -31,6 +31,7 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const compression = require("compression");
 const dotenv = require("dotenv");
 const { sequelize, testConnection } = require("./config/database");
 const { verifyFirebaseToken } = require("./middleware/authMiddleware");
@@ -51,6 +52,9 @@ const corsOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+// Enable compression middleware for all responses (gzip)
+app.use(compression());
 
 app.use(
   cors({
@@ -215,9 +219,13 @@ app.all("/api/*", (req, res) => {
   });
 });
 
-// Serve static files from React build folder
+// Serve static files from React build folder with caching headers
 const buildPath = path.join(__dirname, "..", "client", "build");
-app.use(express.static(buildPath));
+app.use(express.static(buildPath, {
+  maxAge: '1y', // Cache static assets for 1 year
+  etag: true, // Enable ETag for cache validation
+  lastModified: true // Enable Last-Modified headers
+}));
 
 // Catch-all handler: send back React's index.html file for any non-API routes
 // This allows React Router to handle client-side routing

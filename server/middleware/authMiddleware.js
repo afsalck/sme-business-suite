@@ -209,7 +209,11 @@ function authorizeRole(...authorizedRoles) {
     if (!req.user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    if (!authorizedRoles.includes(req.user.role)) {
+    // Case-insensitive role comparison to handle "Staff" vs "staff" etc.
+    const userRole = (req.user.role || "").toLowerCase();
+    const allowedRoles = authorizedRoles.map(r => r.toLowerCase());
+    
+    if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({ message: "Forbidden" });
     }
     next();

@@ -275,7 +275,8 @@ router.get("/:id/pdf", setTenantContext, async (req, res) => {
     // Get company information from database
     let companyInfo = null;
     try {
-      const company = await Company.findOne({ where: { companyId: 1 } });
+      const companyId = req.companyId || 1; // Use tenant context companyId
+      const company = await Company.findOne({ where: { companyId } });
       if (company) {
         const companyData = company.get({ plain: true });
         console.log("[Invoice PDF] Raw company data from database:", JSON.stringify(companyData, null, 2));

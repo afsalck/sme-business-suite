@@ -16,9 +16,11 @@ async function sendInvoiceEmail(invoice) {
 
   try {
     // Get company information from database
+    // Note: This function doesn't have req context, so we need to get companyId from invoice
     let companyInfo = null;
     try {
-      const company = await Company.findOne({ where: { companyId: 1 } });
+      const companyId = invoice.companyId || 1; // Use invoice's companyId if available
+      const company = await Company.findOne({ where: { companyId } });
       if (company) {
         const companyData = company.get({ plain: true });
         companyInfo = {

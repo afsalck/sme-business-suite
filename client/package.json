@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "description": "",
   "main": "src/index.js",
- "scripts": {
-  "build": "CI=false react-scripts build"
-},
+  "scripts": {
+    "start": "cross-env DISABLE_ESLINT_PLUGIN=true react-scripts start",
+    "build": "CI=false react-scripts build",
+    "test": "cross-env DISABLE_ESLINT_PLUGIN=true react-scripts test",
+    "eject": "react-scripts eject"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -27,6 +30,7 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.20",
+    "cross-env": "^7.0.3",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15"
   },

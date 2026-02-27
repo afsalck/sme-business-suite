@@ -843,7 +843,7 @@ router.delete("/sales/:id", authorizeRole("admin"), setTenantContext, async (req
   }
 });
 
-router.post("/sales", authorizeRole("admin"), setTenantContext, async (req, res) => {
+router.post("/sales", authorizeRole("admin", "staff", "hr"), setTenantContext, async (req, res) => {
   // Check SQL Server connection
   try {
     await sequelize.authenticate();
